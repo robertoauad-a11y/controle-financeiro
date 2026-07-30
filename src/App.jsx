@@ -5,6 +5,9 @@ import {
   Home as HomeIcon, ArrowRight, Download, Pencil
 } from "lucide-react";
 import * as XLSX from "xlsx";
+import { auth, db } from "./firebase.js";
+import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from "firebase/auth";
+import { doc, setDoc, onSnapshot } from "firebase/firestore";
 
 /* ------------------------------------------------------------------ */
 /*  Seed data — empty by default. Use "Importar Excel" to load your   */
@@ -13,14 +16,7 @@ import * as XLSX from "xlsx";
 const SEED = { custos: [], receitas: [], demandas: [] };
 
 const STORAGE_KEY = "financeiro:app-data";
-const PWD_HASH_KEY = "financeiro:pwd-hash";
-const PWD_SESSION_KEY = "financeiro:unlocked";
-
-async function sha256(text) {
-  const enc = new TextEncoder().encode(text);
-  const buf = await crypto.subtle.digest("SHA-256", enc);
-  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, "0")).join("");
-}
+const FIRESTORE_DOC = doc(db, "financeiro", "data");
 
 const MESES = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
 const FONTES = ["Conta Salário","Conta Corrente","Dinheiro","PIX","Transferência","Débito Automático","Cartão de Crédito","BB"];
@@ -56,7 +52,6 @@ const parseDateBR = (s) => {
   const str = String(s).trim();
   const m = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
   if (m) return `${m[3]}-${m[2].padStart(2,"0")}-${m[1].padStart(2,"0")}`;
-  // Handle Excel serial date numbers or Date objects passed through by SheetJS
   if (str.match(/^\d{4}-\d{2}-\d{2}/)) return str.slice(0,10);
   return null;
 };
@@ -282,14 +277,13 @@ function SummaryCard({ icon, label, value, tone = "ink" }) {
   );
 }
 
-function LockScreen({ mode, onSetup, onUnlock, error }) {
-  const [value, setValue] = useState("");
-  const [confirmValue, setConfirmValue] = useState("");
+function LoginScreen({ onLogin, error, loading }) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
 
   const submit = (e) => {
     e.preventDefault();
-    if (mode === "setup") onSetup(value, confirmValue);
-    else onUnlock(value);
+    onLogin(email, password);
   };
 
   return (
@@ -304,25 +298,21 @@ function LockScreen({ mode, onSetup, onUnlock, error }) {
       }}>
         <div>
           <h2 style={{ margin: 0, fontFamily: "'Fraunces', serif", fontSize: 20, color: "#1E2A24" }}>
-            {mode === "setup" ? "Criar senha de acesso" : "Controle Financeiro"}
+            Controle Financeiro
           </h2>
           <p style={{ margin: "6px 0 0", fontSize: 12.5, color: "#6B7268" }}>
-            {mode === "setup"
-              ? "Defina uma senha para proteger o acesso a este app. Ela fica só neste navegador."
-              : "Digite a senha para continuar."}
+            Entre com o e-mail e senha cadastrados no Firebase.
           </p>
         </div>
-        <Field label={mode === "setup" ? "Nova senha" : "Senha"}>
-          <TextInput type="password" autoFocus value={value} onChange={e => setValue(e.target.value)} />
+        <Field label="E-mail">
+          <TextInput type="email" autoFocus value={email} onChange={e => setEmail(e.target.value)} />
         </Field>
-        {mode === "setup" && (
-          <Field label="Confirmar senha">
-            <TextInput type="password" value={confirmValue} onChange={e => setConfirmValue(e.target.value)} />
-          </Field>
-        )}
+        <Field label="Senha">
+          <TextInput type="password" value={password} onChange={e => setPassword(e.target.value)} />
+        </Field>
         {error && <div style={{ fontSize: 12.5, color: "#9B2C2C" }}>{error}</div>}
-        <button type="submit" style={{ ...addBtnStyle, justifyContent: "center" }}>
-          {mode === "setup" ? "Criar senha e entrar" : "Entrar"}
+        <button type="submit" disabled={loading} style={{ ...addBtnStyle, justifyContent: "center", opacity: loading ? 0.7 : 1 }}>
+          {loading ? "Entrando…" : "Entrar"}
         </button>
       </form>
     </div>
@@ -334,8 +324,9 @@ function LockScreen({ mode, onSetup, onUnlock, error }) {
 /* ------------------------------------------------------------------ */
 
 export default function App() {
-  const [authMode, setAuthMode] = useState(null); // 'setup' | 'locked' | 'unlocked'
+  const [user, setUser] = useState(undefined); // undefined = checking, null = logged out
   const [authError, setAuthError] = useState("");
+  const [authLoading, setAuthLoading] = useState(false);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState("custos");
@@ -343,54 +334,45 @@ export default function App() {
   const fileInputRef = useRef(null);
 
   useEffect(() => {
-    const hash = window.localStorage.getItem(PWD_HASH_KEY);
-    const sessionOk = window.sessionStorage.getItem(PWD_SESSION_KEY) === "1";
-    if (sessionOk) { setAuthMode("unlocked"); return; }
-    setAuthMode(hash ? "locked" : "setup");
+    const unsub = onAuthStateChanged(auth, (u) => setUser(u));
+    return () => unsub();
   }, []);
 
-  const handleSetup = async (value, confirmValue) => {
+  const handleLogin = async (email, password) => {
     setAuthError("");
-    if (value.length < 4) { setAuthError("Use pelo menos 4 caracteres."); return; }
-    if (value !== confirmValue) { setAuthError("As senhas não coincidem."); return; }
-    const hash = await sha256(value);
-    window.localStorage.setItem(PWD_HASH_KEY, hash);
-    window.sessionStorage.setItem(PWD_SESSION_KEY, "1");
-    setAuthMode("unlocked");
-  };
-
-  const handleUnlock = async (value) => {
-    setAuthError("");
-    const hash = await sha256(value);
-    const stored = window.localStorage.getItem(PWD_HASH_KEY);
-    if (hash === stored) {
-      window.sessionStorage.setItem(PWD_SESSION_KEY, "1");
-      setAuthMode("unlocked");
-    } else {
-      setAuthError("Senha incorreta.");
+    setAuthLoading(true);
+    try {
+      await signInWithEmailAndPassword(auth, email, password);
+    } catch (e) {
+      setAuthError("E-mail ou senha incorretos.");
+    } finally {
+      setAuthLoading(false);
     }
   };
+
+  const handleLogout = () => signOut(auth);
 
   useEffect(() => {
-    try {
-      const raw = window.localStorage.getItem(STORAGE_KEY);
-      if (raw) {
-        setData(JSON.parse(raw));
+    if (!user) return;
+    const unsub = onSnapshot(FIRESTORE_DOC, async (snap) => {
+      if (snap.exists()) {
+        setData(snap.data());
       } else {
+        await setDoc(FIRESTORE_DOC, SEED);
         setData(SEED);
-        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(SEED));
       }
-    } catch (e) {
-      setData(SEED);
-    } finally {
       setLoading(false);
-    }
-  }, []);
+    }, () => {
+      setSaveError(true);
+      setLoading(false);
+    });
+    return () => unsub();
+  }, [user]);
 
-  const persist = useCallback((next) => {
+  const persist = useCallback(async (next) => {
     setData(next);
     try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+      await setDoc(FIRESTORE_DOC, next);
       setSaveError(false);
     } catch (e) {
       setSaveError(true);
@@ -430,19 +412,14 @@ export default function App() {
     }
   };
 
-  if (authMode === null) {
+  if (user === undefined) {
     return (
       <div style={{ minHeight: "100vh", background: "#1E2A24" }} />
     );
   }
-  if (authMode !== "unlocked") {
+  if (!user) {
     return (
-      <LockScreen
-        mode={authMode}
-        onSetup={handleSetup}
-        onUnlock={handleUnlock}
-        error={authError}
-      />
+      <LoginScreen onLogin={handleLogin} error={authError} loading={authLoading} />
     );
   }
 
@@ -503,6 +480,12 @@ export default function App() {
               border: "none", borderRadius: 9, padding: "9px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer"
             }}>
               <Download size={15} /> Exportar Excel
+            </button>
+            <button onClick={handleLogout} title="Sair" style={{
+              display: "flex", alignItems: "center", gap: 7, background: "transparent", color: "#F7F5F0",
+              border: "1px solid #3A4A3F", borderRadius: 9, padding: "9px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer"
+            }}>
+              Sair
             </button>
           </div>
         </div>
