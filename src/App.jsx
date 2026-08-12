@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import {
   Plus, Trash2, X, Wallet, TrendingUp, TrendingDown, ClipboardList,
   Calendar, Check, AlertCircle, Clock, Filter, ChevronDown, PiggyBank,
@@ -7,16 +7,16 @@ import {
 import * as XLSX from "xlsx";
 import { auth, db } from "./firebase.js";
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from "firebase/auth";
-import { doc, setDoc, onSnapshot } from "firebase/firestore";
+import { collection, doc, addDoc, updateDoc, deleteDoc, onSnapshot, writeBatch } from "firebase/firestore";
 
 /* ------------------------------------------------------------------ */
-/*  Seed data — empty by default. Use "Importar Excel" to load your   */
-/*  data from a spreadsheet (nothing sensitive lives in this file).   */
+/*  Firestore collections — one document per record. Never write an   */
+/*  auto-generated "empty" document; only explicit user actions       */
+/*  (add / edit / delete / import) touch the database.                */
 /* ------------------------------------------------------------------ */
-const SEED = { custos: [], receitas: [], demandas: [] };
-
-const STORAGE_KEY = "financeiro:app-data";
-const FIRESTORE_DOC = doc(db, "financeiro", "data");
+const custosCol = collection(db, "custos");
+const receitasCol = collection(db, "receitas");
+const demandasCol = collection(db, "demandas");
 
 const MESES = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
 const FONTES = ["Conta Salário","Conta Corrente","Dinheiro","PIX","Transferência","Débito Automático","Cartão de Crédito","BB"];
@@ -52,6 +52,7 @@ const parseDateBR = (s) => {
   const str = String(s).trim();
   const m = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
   if (m) return `${m[3]}-${m[2].padStart(2,"0")}-${m[1].padStart(2,"0")}`;
+  // Handle Excel serial date numbers or Date objects passed through by SheetJS
   if (str.match(/^\d{4}-\d{2}-\d{2}/)) return str.slice(0,10);
   return null;
 };
@@ -327,11 +328,16 @@ export default function App() {
   const [user, setUser] = useState(undefined); // undefined = checking, null = logged out
   const [authError, setAuthError] = useState("");
   const [authLoading, setAuthLoading] = useState(false);
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [custos, setCustos] = useState([]);
+  const [receitas, setReceitas] = useState([]);
+  const [demandas, setDemandas] = useState([]);
+  const [loadedFlags, setLoadedFlags] = useState({ custos: false, receitas: false, demandas: false });
   const [tab, setTab] = useState("custos");
   const [saveError, setSaveError] = useState(false);
   const fileInputRef = useRef(null);
+
+  const loading = !(loadedFlags.custos && loadedFlags.receitas && loadedFlags.demandas);
+  const data = useMemo(() => ({ custos, receitas, demandas }), [custos, receitas, demandas]);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => setUser(u));
@@ -352,44 +358,56 @@ export default function App() {
 
   const handleLogout = () => signOut(auth);
 
+  // Real-time listeners — each collection reflects exactly what's in
+  // Firestore. Nothing here ever writes; reading never has side effects.
   useEffect(() => {
     if (!user) return;
-    const unsub = onSnapshot(FIRESTORE_DOC, async (snap) => {
-      if (snap.exists()) {
-        setData(snap.data());
-      } else {
-        await setDoc(FIRESTORE_DOC, SEED);
-        setData(SEED);
-      }
-      setLoading(false);
-    }, () => {
-      setSaveError(true);
-      setLoading(false);
-    });
-    return () => unsub();
+    const toRow = (d) => ({ id: d.id, ...d.data() });
+    const unsubC = onSnapshot(custosCol, snap => {
+      setCustos(snap.docs.map(toRow));
+      setLoadedFlags(f => ({ ...f, custos: true }));
+    }, () => setSaveError(true));
+    const unsubR = onSnapshot(receitasCol, snap => {
+      setReceitas(snap.docs.map(toRow));
+      setLoadedFlags(f => ({ ...f, receitas: true }));
+    }, () => setSaveError(true));
+    const unsubD = onSnapshot(demandasCol, snap => {
+      setDemandas(snap.docs.map(toRow));
+      setLoadedFlags(f => ({ ...f, demandas: true }));
+    }, () => setSaveError(true));
+    return () => { unsubC(); unsubR(); unsubD(); };
   }, [user]);
 
-  const persist = useCallback(async (next) => {
-    setData(next);
-    try {
-      await setDoc(FIRESTORE_DOC, next);
-      setSaveError(false);
-    } catch (e) {
-      setSaveError(true);
-    }
-  }, []);
-
-  const addCusto = (c) => persist({ ...data, custos: [{ ...c, id: uid("c") }, ...data.custos] });
-  const removeCusto = (id) => persist({ ...data, custos: data.custos.filter(c => c.id !== id) });
-  const updateCusto = (id, c) => persist({ ...data, custos: data.custos.map(x => x.id === id ? { ...c, id } : x) });
-  const addReceita = (r) => persist({ ...data, receitas: [{ ...r, id: uid("r") }, ...data.receitas] });
-  const removeReceita = (id) => persist({ ...data, receitas: data.receitas.filter(r => r.id !== id) });
-  const updateReceita = (id, r) => persist({ ...data, receitas: data.receitas.map(x => x.id === id ? { ...r, id } : x) });
-  const addDemanda = (d) => persist({ ...data, demandas: [{ ...d, id: uid("d") }, ...data.demandas] });
-  const removeDemanda = (id) => persist({ ...data, demandas: data.demandas.filter(d => d.id !== id) });
-  const updateDemandaStatus = (id, status) => persist({
-    ...data, demandas: data.demandas.map(d => d.id === id ? { ...d, status } : d)
-  });
+  // Every write below touches only the single document it concerns —
+  // never the whole collection — so one action can never overwrite
+  // or erase everything else.
+  const addCusto = async (c) => {
+    try { await addDoc(custosCol, c); setSaveError(false); } catch (e) { setSaveError(true); }
+  };
+  const removeCusto = async (id) => {
+    try { await deleteDoc(doc(db, "custos", id)); setSaveError(false); } catch (e) { setSaveError(true); }
+  };
+  const updateCusto = async (id, c) => {
+    try { await updateDoc(doc(db, "custos", id), c); setSaveError(false); } catch (e) { setSaveError(true); }
+  };
+  const addReceita = async (r) => {
+    try { await addDoc(receitasCol, r); setSaveError(false); } catch (e) { setSaveError(true); }
+  };
+  const removeReceita = async (id) => {
+    try { await deleteDoc(doc(db, "receitas", id)); setSaveError(false); } catch (e) { setSaveError(true); }
+  };
+  const updateReceita = async (id, r) => {
+    try { await updateDoc(doc(db, "receitas", id), r); setSaveError(false); } catch (e) { setSaveError(true); }
+  };
+  const addDemanda = async (d) => {
+    try { await addDoc(demandasCol, d); setSaveError(false); } catch (e) { setSaveError(true); }
+  };
+  const removeDemanda = async (id) => {
+    try { await deleteDoc(doc(db, "demandas", id)); setSaveError(false); } catch (e) { setSaveError(true); }
+  };
+  const updateDemandaStatus = async (id, status) => {
+    try { await updateDoc(doc(db, "demandas", id), { status }); setSaveError(false); } catch (e) { setSaveError(true); }
+  };
 
   const handleImportClick = () => fileInputRef.current?.click();
   const handleFileChange = async (e) => {
@@ -397,14 +415,22 @@ export default function App() {
     if (!file) return;
     try {
       const parsed = await importFromExcel(file);
-      const hasExisting = data.custos.length || data.receitas.length || data.demandas.length;
+      const hasExisting = custos.length || receitas.length || demandas.length;
       if (hasExisting) {
         const ok = window.confirm(
-          `Isso vai substituir os dados atuais (${data.custos.length} custos, ${data.receitas.length} receitas, ${data.demandas.length} demandas) pelos do arquivo importado. Continuar?`
+          `Isso vai substituir os dados atuais (${custos.length} custos, ${receitas.length} receitas, ${demandas.length} demandas) pelos do arquivo importado. Continuar?`
         );
         if (!ok) { e.target.value = ""; return; }
       }
-      await persist(parsed);
+      const batch = writeBatch(db);
+      custos.forEach(c => batch.delete(doc(db, "custos", c.id)));
+      receitas.forEach(r => batch.delete(doc(db, "receitas", r.id)));
+      demandas.forEach(d => batch.delete(doc(db, "demandas", d.id)));
+      parsed.custos.forEach(c => { const { id, ...rest } = c; batch.set(doc(custosCol), rest); });
+      parsed.receitas.forEach(r => { const { id, ...rest } = r; batch.set(doc(receitasCol), rest); });
+      parsed.demandas.forEach(d => { const { id, ...rest } = d; batch.set(doc(demandasCol), rest); });
+      await batch.commit();
+      setSaveError(false);
     } catch (err) {
       alert("Não foi possível importar este arquivo. Confirme se é um Excel exportado por este app.");
     } finally {
@@ -423,7 +449,7 @@ export default function App() {
     );
   }
 
-  if (loading || !data) {
+  if (loading) {
     return (
       <div style={{
         minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center",
