@@ -8,7 +8,7 @@ import * as XLSX from "xlsx";
 import { auth, db } from "./firebase.js";
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from "firebase/auth";
 import { collection, doc, addDoc, updateDoc, deleteDoc, onSnapshot, writeBatch } from "firebase/firestore";
-import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, ReferenceLine } from "recharts";
+import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, ReferenceLine, AreaChart, Area } from "recharts";
 
 /* ------------------------------------------------------------------ */
 /*  Firestore collections — one document per record. Never write an   */
@@ -20,7 +20,7 @@ const receitasCol = collection(db, "receitas");
 const demandasCol = collection(db, "demandas");
 
 const MESES = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
-const FONTES = ["Conta Salário","Conta Corrente","Dinheiro","PIX","Transferência","Débito Automático","Cartão de Crédito","BB"];
+const FONTES = ["Conta Salário","Conta Corrente","Dinheiro","PIX","Transferência","Débito Automático","BB"];
 const STATUS_CUSTO = ["Pago","Pendente","Atrasado"];
 const STATUS_RECEITA = ["Recebido","Parcial","Pendente"];
 const PRIORIDADES = ["Alta","Média","Baixa"];
@@ -58,8 +58,64 @@ const parseDateBR = (s) => {
   return null;
 };
 const uid = (p) => `${p}${Date.now().toString(36)}${Math.random().toString(36).slice(2,7)}`;
+
+// Turns free text like "aluguel 2675 dia 10" or "recebi 800 freelance dia 15"
+// into a draft entry. Deliberately forgiving — it only has to get close;
+// the person confirms/edits everything before it's saved.
+function parseQuickEntry(rawText) {
+  let text = rawText.trim();
+  const lower = text.toLowerCase();
+  let dataStr = null;
+
+  const fullDate = text.match(/(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?/);
+  if (fullDate) {
+    const d = fullDate[1].padStart(2, "0");
+    const m = fullDate[2].padStart(2, "0");
+    let y = fullDate[3] || String(new Date().getFullYear());
+    if (y.length === 2) y = "20" + y;
+    dataStr = `${y}-${m}-${d}`;
+    text = text.replace(fullDate[0], " ");
+  } else {
+    const diaMatch = lower.match(/\bdia\s+(\d{1,2})\b/);
+    if (diaMatch) {
+      const now = new Date();
+      const dia = String(parseInt(diaMatch[1], 10)).padStart(2, "0");
+      const mes = String(now.getMonth() + 1).padStart(2, "0");
+      dataStr = `${now.getFullYear()}-${mes}-${dia}`;
+      text = text.replace(new RegExp(diaMatch[0].replace(/\s+/g, "\\s+"), "i"), " ");
+    }
+  }
+  if (!dataStr) dataStr = new Date().toISOString().slice(0, 10);
+
+  let valor = 0;
+  const valorMatches = [...text.matchAll(/\d{1,3}(?:\.\d{3})*(?:,\d{1,2})?|\d+(?:,\d{1,2})?/g)];
+  if (valorMatches.length) {
+    const parsed = valorMatches.map(m => {
+      let numStr = m[0];
+      numStr = numStr.includes(",") ? numStr.replace(/\./g, "").replace(",", ".") : numStr;
+      return { raw: m[0], value: parseFloat(numStr) || 0 };
+    });
+    // The money amount is virtually always the largest number in a short entry —
+    // day-of-month remnants and item counts ("parcela 3") are small by comparison.
+    const best = parsed.reduce((a, b) => (b.value > a.value ? b : a));
+    valor = best.value;
+    text = text.replace(best.raw, " ");
+  }
+
+  text = text.replace(/\br\$/gi, " ").replace(/\breais?\b/gi, " ").replace(/\s+/g, " ").trim();
+  const descricao = text ? text.charAt(0).toUpperCase() + text.slice(1) : "";
+
+  const isReceita = /receb|sal[áa]rio|entrada|venda|renda|dep[óo]sito/i.test(lower);
+
+  return { tipo: isReceita ? "receita" : "custo", descricao: descricao || "Novo lançamento", valor, data: dataStr };
+}
 const todayISO = () => new Date().toISOString().slice(0,10);
 const currentMonth = () => new Date().toISOString().slice(0,7);
+const shiftMonth = (mes, delta) => {
+  const [y, m] = mes.split("-").map(Number);
+  const d = new Date(y, (m - 1) + delta, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+};
 
 function exportToExcel(data) {
   const wb = XLSX.utils.book_new();
@@ -194,7 +250,13 @@ const shadowSm = "0 1px 3px rgba(0,0,0,0.35), 0 0 0 1px rgba(255,255,255,0.04)";
 const shadowMd = "0 10px 30px rgba(0,0,0,0.45), 0 0 0 1px rgba(255,255,255,0.05)";
 // Closed tonal system: every chart color is a shade of emerald/amber/coral/ink —
 // no unrelated hues, so multi-slice charts still read as "one app", not a mix.
-const CHART_PALETTE = [C.emerald, C.amber, C.coral, C.emeraldDeep, C.amberDeep, C.coralDeep, C.inkSoft, C.emeraldLight];
+// Saídas (custos): tons quentes primeiro; Entradas (receitas): tons frios/verdes primeiro.
+// Cada paleta tem 8 cores bem distintas entre si, para nenhuma fatia se confundir com outra.
+const PALETTE_OUT = ["#FF5A68", "#FF8A3D", "#FFC53D", "#F472B6", "#A78BFA", "#38BDF8", "#2DD4BF", "#9AA5D1"];
+const PALETTE_IN = ["#00E0A8", "#22D3EE", "#4FA3FF", "#B5E655", "#818CF8", "#FDE047", "#F0ABFC", "#86EFAC"];
+const CHART_PALETTE = PALETTE_OUT;
+// Cor fixa por fonte: "Conta Salário" tem sempre a mesma cor em qualquer gráfico ou mês.
+const fonteColor = (name) => PALETTE_OUT[Math.max(0, FONTES.indexOf(name)) % PALETTE_OUT.length];
 const STATUS_ACCENT = {
   "Pago": C.emerald, "Recebido": C.emerald, "Concluída": C.emerald,
   "Parcial": C.amber, "Em Andamento": C.amber, "Pendente": C.amber,
@@ -262,6 +324,15 @@ const inputStyle = {
 
 function TextInput(props) {
   return <input {...props} style={{ ...inputStyle, ...(props.style||{}) }} />;
+}
+function TextArea({ rows = 3, ...props }) {
+  return (
+    <textarea
+      rows={rows}
+      {...props}
+      style={{ ...inputStyle, resize: "vertical", fontFamily: "'Inter', sans-serif", lineHeight: 1.45, ...(props.style || {}) }}
+    />
+  );
 }
 function SelectInput({ options, ...props }) {
   return (
@@ -370,6 +441,105 @@ const NAV_ITEMS = [
   { key: "resumo", label: "Anual", icon: Calendar },
   { key: "demandas", label: "Tarefas", icon: ClipboardList },
 ];
+
+// Global action, not a screen: reachable from any tab, opens a sheet on top
+// of whatever the person is doing, and returns them there once confirmed.
+function QuickAddFab({ onAddCusto, onAddReceita }) {
+  const [open, setOpen] = useState(false);
+  const [step, setStep] = useState("input");
+  const [text, setText] = useState("");
+  const [draft, setDraft] = useState(null);
+
+  const reset = () => { setOpen(false); setStep("input"); setText(""); setDraft(null); };
+
+  const analisar = () => {
+    if (!text.trim()) return;
+    setDraft(parseQuickEntry(text));
+    setStep("review");
+  };
+
+  const salvar = () => {
+    if (!draft.descricao || !draft.data || draft.valor === "") return;
+    const mes = draft.data.slice(0, 7);
+    const anoNum = parseInt(draft.data.slice(0, 4), 10);
+    const valorNum = parseFloat(draft.valor) || 0;
+    if (draft.tipo === "custo") {
+      onAddCusto({
+        mes, ano: anoNum, descricao: draft.descricao, vencimento: draft.data, dataPagamento: "",
+        valorPrevisto: valorNum, valorPago: null,
+        fonte: draft.fonte || FONTES[0], status: draft.status || "Pendente", obs: ""
+      });
+    } else {
+      onAddReceita({
+        mes, ano: anoNum, descricao: draft.descricao, dataRecebimento: draft.data,
+        valorPrevisto: valorNum, valorRecebido: null,
+        categoria: draft.categoria || "", contaDestino: draft.fonte || FONTES[1],
+        status: draft.status || "Pendente", obs: ""
+      });
+    }
+    reset();
+  };
+
+  return (
+    <>
+      <button className="tap" onClick={() => setOpen(true)} title="Lançamento rápido" style={{
+        position: "fixed", right: 18, bottom: "calc(92px + env(safe-area-inset-bottom))", zIndex: 42,
+        width: 56, height: 56, borderRadius: 28, border: "none",
+        background: C.emerald, color: "#0A0E1C", cursor: "pointer",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        boxShadow: "0 10px 26px rgba(0,224,168,0.45)"
+      }}>
+        <Plus size={26} strokeWidth={2.6} />
+      </button>
+
+      {open && step === "input" && (
+        <Modal title="Lançamento rápido" onClose={reset}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <span style={{ fontSize: 12.5, color: C.muted, lineHeight: 1.5 }}>
+              Descreva em texto livre — ex: "aluguel 2675 dia 10" ou "recebi 800 freelance dia 15".
+            </span>
+            <TextArea rows={3} autoFocus value={text} onChange={e => setText(e.target.value)} placeholder="Digite aqui..." />
+            <button className="tap" onClick={analisar} style={{ ...addBtnStyle, justifyContent: "center" }}>
+              <Check size={16} /> Analisar
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {open && step === "review" && draft && (
+        <Modal title="Confirmar lançamento" onClose={reset}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <Field label="Tipo">
+              <div style={{ display: "flex", gap: 8 }}>
+                {["custo", "receita"].map(t => (
+                  <button key={t} type="button" onClick={() => setDraft(d => ({ ...d, tipo: t }))} style={{
+                    flex: 1, padding: "9px 0", borderRadius: 10, border: `1px solid ${draft.tipo === t ? C.emerald : C.border}`,
+                    background: draft.tipo === t ? C.emeraldSoft : C.card, color: draft.tipo === t ? C.emerald : C.muted,
+                    fontWeight: 700, fontSize: 12.5, cursor: "pointer"
+                  }}>{t === "custo" ? "Custo" : "Receita"}</button>
+                ))}
+              </div>
+            </Field>
+            <Field label="Valor (R$)"><TextInput type="number" step="0.01" value={draft.valor} onChange={e => setDraft({ ...draft, valor: e.target.value })} /></Field>
+            <Field label="Descrição"><TextInput style={{ gridColumn: "span 2" }} value={draft.descricao} onChange={e => setDraft({ ...draft, descricao: e.target.value })} /></Field>
+            <Field label={draft.tipo === "custo" ? "Vencimento" : "Recebimento"}>
+              <TextInput type="date" value={draft.data} onChange={e => setDraft({ ...draft, data: e.target.value })} />
+            </Field>
+            <Field label={draft.tipo === "custo" ? "Fonte de Pagamento" : "Conta de Destino"}>
+              <SelectInput options={FONTES} value={draft.fonte || (draft.tipo === "custo" ? FONTES[0] : FONTES[1])} onChange={e => setDraft({ ...draft, fonte: e.target.value })} />
+            </Field>
+            <Field label="Status">
+              <SelectInput options={draft.tipo === "custo" ? STATUS_CUSTO : STATUS_RECEITA} value={draft.status || "Pendente"} onChange={e => setDraft({ ...draft, status: e.target.value })} />
+            </Field>
+            <button type="button" onClick={salvar} style={{ ...addBtnStyle, gridColumn: "span 2", justifyContent: "center", marginTop: 4 }}>
+              <Check size={16} /> Salvar
+            </button>
+          </div>
+        </Modal>
+      )}
+    </>
+  );
+}
 
 function BottomNav({ tab, setTab }) {
   return (
@@ -612,6 +782,7 @@ export default function App() {
         .in { animation: fadeInUp .4s cubic-bezier(.22,1,.36,1) backwards; }
         .grid2 { display: grid; grid-template-columns: 1fr; gap: 20px; }
         @media (min-width: 680px) { .grid2 { grid-template-columns: 1fr 1fr; } .grid2 > * { margin-bottom: 0 !important; } }
+        @media (min-width: 1100px) { .grid2 { grid-template-columns: 1fr 1fr 1fr; } }
         @media (min-width: 760px) { .kanban { grid-template-columns: 1fr 1fr 1fr !important; } }
       `}</style>
 
@@ -682,7 +853,7 @@ export default function App() {
       </div>
 
       <main style={{ maxWidth: 1080, margin: "0 auto", padding: "20px 20px 0" }}>
-        {tab === "dashboard" && <DashboardTab custos={data.custos} receitas={data.receitas} />}
+        {tab === "dashboard" && <DashboardTab custos={data.custos} receitas={data.receitas} demandas={data.demandas} onNavigate={setTab} />}
         {tab === "custos" && <CustosTab custos={data.custos} onAdd={addCusto} onRemove={removeCusto} onUpdate={updateCusto} />}
         {tab === "receitas" && <ReceitasTab receitas={data.receitas} onAdd={addReceita} onRemove={removeReceita} onUpdate={updateReceita} />}
         {tab === "resumo" && <ResumoTab custos={data.custos} receitas={data.receitas} />}
@@ -690,6 +861,7 @@ export default function App() {
       </main>
 
       <BottomNav tab={tab} setTab={setTab} />
+      <QuickAddFab onAddCusto={addCusto} onAddReceita={addReceita} />
 
       {saveError && (
         <div style={{
@@ -767,10 +939,88 @@ function BalanceHero({ saldo, mesLabel, hidden, onToggle, saldosPorMes }) {
   );
 }
 
-function DashboardTab({ custos, receitas }) {
+// Overdue or due-within-7-days custos/demandas, surfaced at the very top
+// of the dashboard so nothing urgent needs to be hunted for.
+function useAtencao(custos, demandas) {
+  return useMemo(() => {
+    const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
+    const limite = new Date(hoje); limite.setDate(limite.getDate() + 7);
+    const toDateObj = (s) => {
+      if (!s) return null;
+      const [y, m, d] = s.split("-").map(Number);
+      if (!y || !m || !d) return null;
+      return new Date(y, m - 1, d);
+    };
+    const itensCusto = custos
+      .filter(c => c.status !== "Pago" && c.vencimento)
+      .map(c => ({ id: `c-${c.id}`, tab: "custos", label: c.descricao, data: c.vencimento, dateObj: toDateObj(c.vencimento) }))
+      .filter(i => i.dateObj && i.dateObj <= limite);
+    const itensDemanda = demandas
+      .filter(d => d.status !== "Concluída" && d.prazo)
+      .map(d => ({ id: `d-${d.id}`, tab: "demandas", label: d.nome, data: d.prazo, dateObj: toDateObj(d.prazo) }))
+      .filter(i => i.dateObj && i.dateObj <= limite);
+    return [...itensCusto, ...itensDemanda]
+      .map(i => ({ ...i, atrasado: i.dateObj < hoje }))
+      .sort((a, b) => a.dateObj - b.dateObj);
+  }, [custos, demandas]);
+}
+
+function AttentionCard({ itens, onNavigate }) {
+  if (itens.length === 0) return null;
+  return (
+    <div className="in" style={{ background: C.card, boxShadow: shadowSm, borderRadius: 18, padding: "16px 18px", marginBottom: 20 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+        <AlertCircle size={16} color={C.coral} />
+        <span style={{ fontWeight: 700, fontSize: 13, color: C.ink, textTransform: "uppercase", letterSpacing: 0.4 }}>Precisa de atenção</span>
+        <span style={{ fontSize: 11, fontWeight: 700, color: C.coral, background: C.coralSoft, borderRadius: 10, padding: "1px 8px" }}>
+          {itens.length}
+        </span>
+      </div>
+      <div style={{ display: "flex", flexDirection: "column" }}>
+        {itens.slice(0, 6).map((item, i) => (
+          <div
+            key={item.id}
+            className="tap"
+            onClick={() => onNavigate && onNavigate(item.tab)}
+            style={{
+              display: "flex", alignItems: "center", gap: 10, cursor: onNavigate ? "pointer" : "default",
+              padding: "9px 2px", borderBottom: i < Math.min(itens.length, 6) - 1 ? `1px solid ${C.border}` : "none"
+            }}
+          >
+            <Clock size={14} color={item.atrasado ? C.coral : C.amber} style={{ flexShrink: 0 }} />
+            <span style={{ flex: 1, fontSize: 13, color: C.ink, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {item.label}
+            </span>
+            <span style={{ fontSize: 11.5, fontWeight: 700, color: item.atrasado ? C.coral : C.amber, flexShrink: 0 }}>
+              {item.atrasado ? "Atrasado" : fmtDate(item.data)}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ProjBar({ label, done, pending, color, max, hidden }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+      <span style={{ width: 62, fontSize: 11.5, fontWeight: 700, color: C.muted, textTransform: "uppercase", letterSpacing: 0.3 }}>{label}</span>
+      <div style={{ flex: 1, height: 14, borderRadius: 7, background: C.border, overflow: "hidden", display: "flex" }}>
+        <div style={{ width: `${(done / max) * 100}%`, background: color }} />
+        <div style={{ width: `${(pending / max) * 100}%`, background: `repeating-linear-gradient(135deg, ${color}88 0 6px, ${color}33 6px 12px)` }} />
+      </div>
+      <span style={{ minWidth: 130, textAlign: "right", fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: C.ink }}>
+        {hidden ? "•••" : fmtBRL(done + pending)}
+      </span>
+    </div>
+  );
+}
+
+function DashboardTab({ custos, receitas, demandas, onNavigate }) {
   const [hidden, setHidden] = useState(false);
   const ano = new Date().getFullYear();
   const mesAtual = currentMonth();
+  const atencao = useAtencao(custos, demandas);
 
   const saldosPorMes = useMemo(() => MESES.map((_, idx) => {
     const mesKey = `${ano}-${String(idx + 1).padStart(2, "0")}`;
@@ -807,6 +1057,11 @@ function DashboardTab({ custos, receitas }) {
     return Object.entries(map).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
   }, [receitas, mesAtual]);
 
+  const catColor = useMemo(() => {
+    const cats = [...new Set(receitas.map(r => r.categoria || "Outras"))].sort();
+    return (name) => PALETTE_IN[Math.max(0, cats.indexOf(name)) % PALETTE_IN.length];
+  }, [receitas]);
+
   const tendencia = useMemo(() => {
     const out = [];
     const now = new Date();
@@ -827,10 +1082,42 @@ function DashboardTab({ custos, receitas }) {
   }, [custos, mesAtual]);
   const topMax = Math.max(1, ...topCustos.map(c => Number(c.valorPago ?? c.valorPrevisto ?? 0)));
 
+  const mesAnterior = shiftMonth(mesAtual, -1);
+
+  const projecao = useMemo(() => {
+    const cs = custos.filter(c => c.mes === mesAtual);
+    const rs = receitas.filter(r => r.mes === mesAtual);
+    const pago = cs.reduce((t, c) => t + Number(c.valorPago || 0), 0);
+    const aPagar = cs.filter(c => c.status !== "Pago").reduce((t, c) => t + Number(c.valorPrevisto || 0), 0);
+    const recebido = rs.reduce((t, r) => t + Number(r.valorRecebido || 0), 0);
+    const aReceber = rs.filter(r => r.status !== "Recebido").reduce((t, r) => t + Math.max(0, Number(r.valorPrevisto || 0) - Number(r.valorRecebido || 0)), 0);
+    return { pago, aPagar, recebido, aReceber, saldoProjetado: (recebido + aReceber) - (pago + aPagar) };
+  }, [custos, receitas, mesAtual]);
+  const projMax = Math.max(1, projecao.recebido + projecao.aReceber, projecao.pago + projecao.aPagar);
+
+  const comparativo = useMemo(() => {
+    const soma = (mes, fonte) => custos.filter(c => c.mes === mes && c.fonte === fonte).reduce((t, c) => t + Number(c.valorPago ?? c.valorPrevisto ?? 0), 0);
+    return FONTES.map(f => ({ fonte: f, Atual: soma(mesAtual, f), Anterior: soma(mesAnterior, f) })).filter(r => r.Atual > 0 || r.Anterior > 0);
+  }, [custos, mesAtual, mesAnterior]);
+  const variacoes = comparativo
+    .filter(r => r.Anterior > 0)
+    .map(r => ({ fonte: r.fonte, pct: ((r.Atual - r.Anterior) / r.Anterior) * 100 }))
+    .sort((a, b) => Math.abs(b.pct) - Math.abs(a.pct));
+
+  const acumulado = useMemo(() => {
+    let cum = 0;
+    const mesIdx = new Date().getMonth();
+    return MESES_ABR.map((m, i) => { cum += saldosPorMes[i]; return { mes: m, Acumulado: i <= mesIdx ? cum : null }; });
+  }, [saldosPorMes]);
+  const acumAtual = [...acumulado].reverse().find(d => d.Acumulado !== null)?.Acumulado ?? 0;
+  const acumColor = acumAtual < 0 ? C.coral : C.emerald;
+
   const mesLabel = monthLabel(mesAtual);
 
   return (
     <div>
+      <AttentionCard itens={atencao} onNavigate={onNavigate} />
+
       <BalanceHero saldo={kpis.saldo} mesLabel={mesLabel} hidden={hidden} onToggle={() => setHidden(h => !h)} saldosPorMes={saldosPorMes} />
 
       <StatRow stats={[
@@ -839,16 +1126,38 @@ function DashboardTab({ custos, receitas }) {
         { icon: <PiggyBank size={12} />, label: "Recebido", value: hidden ? "•••" : fmtBRL(kpis.totalRecebido) },
       ]} />
 
-      <div className="grid2" style={{ marginBottom: 20 }}>
-        <div className="in" style={{ background: C.card, boxShadow: shadowSm, borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "0ms" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8 }}>
-            <span style={{ fontWeight: 700, fontSize: 13.5, color: C.ink }}>Orçamento do mês</span>
-            <span style={{ fontSize: 12.5, fontWeight: 700, color: kpis.pctUsado > 100 ? C.coral : C.emerald }}>
-              {kpis.pctUsado.toFixed(0)}% usado
-            </span>
+      <div className="in" style={{ background: C.card, boxShadow: shadowSm, borderRadius: 18, padding: "20px 22px", marginBottom: 20 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12, marginBottom: 16 }}>
+          <div>
+            <div style={{ fontWeight: 700, fontSize: 13.5, color: C.ink }}>Projeção de fechamento — {mesLabel}</div>
+            <div style={{ fontSize: 11.5, color: C.faint, marginTop: 3 }}>Se tudo o que está previsto for pago e recebido</div>
           </div>
-          <ProgressBar pct={kpis.pctUsado} />
+          <div style={{ textAlign: "right" }}>
+            <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 24, fontWeight: 700, color: projecao.saldoProjetado < 0 ? C.coral : C.emerald }}>
+              {hidden ? "R$ •••••" : fmtBRL(projecao.saldoProjetado)}
+            </div>
+            <div style={{ fontSize: 11, color: C.faint }}>saldo previsto no fim do mês</div>
+          </div>
         </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <ProjBar label="Entradas" done={projecao.recebido} pending={projecao.aReceber} color={C.emerald} max={projMax} hidden={hidden} />
+          <ProjBar label="Saídas" done={projecao.pago} pending={projecao.aPagar} color={C.coral} max={projMax} hidden={hidden} />
+        </div>
+        <div style={{ display: "flex", gap: 16, marginTop: 12, fontSize: 11, color: C.faint, flexWrap: "wrap" }}>
+          <span style={{ display: "flex", alignItems: "center", gap: 6 }}><span style={{ width: 10, height: 10, borderRadius: 3, background: C.muted }} />já realizado</span>
+          <span style={{ display: "flex", alignItems: "center", gap: 6 }}><span style={{ width: 10, height: 10, borderRadius: 3, background: `repeating-linear-gradient(135deg, ${C.muted}88 0 3px, ${C.muted}33 3px 6px)` }} />ainda previsto</span>
+        </div>
+        <div style={{ marginTop: 18 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8 }}>
+            <span style={{ fontWeight: 700, fontSize: 12.5, color: C.ink }}>Orçamento do mês</span>
+            <span style={{ fontSize: 12.5, fontWeight: 700, color: kpis.pctUsado > 100 ? C.coral : C.emerald }}>{kpis.pctUsado.toFixed(0)}% usado</span>
+          </div>
+          <ProgressBar pct={kpis.pctUsado} color="linear-gradient(90deg, #00E0A8, #22D3EE)" />
+        </div>
+      </div>
+
+      <div className="grid2" style={{ marginBottom: 20 }}>
+        {/* Orçamento agora vive dentro do card de projeção */}
 
         <div className="in" style={{ background: C.card, boxShadow: shadowSm, borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "40ms" }}>
           <div style={{ fontWeight: 700, fontSize: 13.5, color: C.ink, marginBottom: 10 }}>Custos por fonte — {mesLabel}</div>
@@ -860,7 +1169,7 @@ function DashboardTab({ custos, receitas }) {
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
                     <Pie data={porFonte} dataKey="value" nameKey="name" innerRadius={36} outerRadius={60} paddingAngle={2}>
-                      {porFonte.map((_, i) => <Cell key={i} fill={CHART_PALETTE[i % CHART_PALETTE.length]} />)}
+                      {porFonte.map((f) => <Cell key={f.name} fill={fonteColor(f.name)} />)}
                     </Pie>
                     <Tooltip formatter={(v) => fmtBRL(v)} contentStyle={{ borderRadius: 10, border: "none", background: C.card, boxShadow: shadowMd, fontSize: 12.5, color: C.ink }} itemStyle={{ color: C.ink }} labelStyle={{ color: C.muted }} />
                   </PieChart>
@@ -869,7 +1178,7 @@ function DashboardTab({ custos, receitas }) {
               <div style={{ display: "flex", flexDirection: "column", gap: 6, flex: 1, minWidth: 120 }}>
                 {porFonte.map((f, i) => (
                   <div key={f.name} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5 }}>
-                    <span style={{ width: 9, height: 9, borderRadius: 3, background: CHART_PALETTE[i % CHART_PALETTE.length], flexShrink: 0 }} />
+                    <span style={{ width: 9, height: 9, borderRadius: 3, background: fonteColor(f.name), flexShrink: 0 }} />
                     <span style={{ color: C.ink, flex: 1 }}>{f.name}</span>
                     <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: C.muted, fontSize: 12 }}>{fmtBRL(f.value)}</span>
                   </div>
@@ -889,7 +1198,7 @@ function DashboardTab({ custos, receitas }) {
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
                     <Pie data={porCategoria} dataKey="value" nameKey="name" innerRadius={36} outerRadius={60} paddingAngle={2}>
-                      {porCategoria.map((_, i) => <Cell key={i} fill={CHART_PALETTE[i % CHART_PALETTE.length]} />)}
+                      {porCategoria.map((f) => <Cell key={f.name} fill={catColor(f.name)} />)}
                     </Pie>
                     <Tooltip formatter={(v) => fmtBRL(v)} contentStyle={{ borderRadius: 10, border: "none", background: C.card, boxShadow: shadowMd, fontSize: 12.5, color: C.ink }} itemStyle={{ color: C.ink }} labelStyle={{ color: C.muted }} />
                   </PieChart>
@@ -898,7 +1207,7 @@ function DashboardTab({ custos, receitas }) {
               <div style={{ display: "flex", flexDirection: "column", gap: 6, flex: 1, minWidth: 120 }}>
                 {porCategoria.map((f, i) => (
                   <div key={f.name} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5 }}>
-                    <span style={{ width: 9, height: 9, borderRadius: 3, background: CHART_PALETTE[i % CHART_PALETTE.length], flexShrink: 0 }} />
+                    <span style={{ width: 9, height: 9, borderRadius: 3, background: catColor(f.name), flexShrink: 0 }} />
                     <span style={{ color: C.ink, flex: 1 }}>{f.name}</span>
                     <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: C.muted, fontSize: 12 }}>{fmtBRL(f.value)}</span>
                   </div>
@@ -913,11 +1222,19 @@ function DashboardTab({ custos, receitas }) {
           <div style={{ width: "100%", height: 170 }}>
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={tendencia} barGap={4}>
+                <defs>
+                  <linearGradient id="gPago" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#FF7A85" /><stop offset="100%" stopColor="#E8434F" />
+                  </linearGradient>
+                  <linearGradient id="gRecebido" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#2CF0BD" /><stop offset="100%" stopColor="#00B98A" />
+                  </linearGradient>
+                </defs>
                 <XAxis dataKey="mes" tick={{ fontSize: 11, fill: C.faint }} axisLine={{ stroke: C.border }} tickLine={false} />
                 <YAxis hide />
                 <Tooltip formatter={(v) => fmtBRL(v)} contentStyle={{ borderRadius: 10, border: "none", background: C.card, boxShadow: shadowMd, fontSize: 12.5, color: C.ink }} itemStyle={{ color: C.ink }} labelStyle={{ color: C.muted }} />
-                <Bar dataKey="Pago" fill={C.coral} radius={[4, 4, 0, 0]} />
-                <Bar dataKey="Recebido" fill={C.emerald} radius={[4, 4, 0, 0]} />
+                <Bar dataKey="Pago" fill="url(#gPago)" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="Recebido" fill="url(#gRecebido)" radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -937,12 +1254,64 @@ function DashboardTab({ custos, receitas }) {
                       <span style={{ color: C.ink, fontWeight: 600 }}>{c.descricao}</span>
                       <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: C.muted }}>{fmtBRL(v)}</span>
                     </div>
-                    <ProgressBar pct={(v / topMax) * 100} color={CHART_PALETTE[i % CHART_PALETTE.length]} height={6} />
+                    <ProgressBar pct={(v / topMax) * 100} color={fonteColor(c.fonte)} height={6} />
                   </div>
                 );
               })}
             </div>
           )}
+        </div>
+        <div className="in" style={{ background: C.card, boxShadow: shadowSm, borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "240ms" }}>
+          <div style={{ fontWeight: 700, fontSize: 13.5, color: C.ink, marginBottom: 4 }}>Este mês x mês anterior — por fonte</div>
+          <div style={{ fontSize: 11.5, color: C.faint, marginBottom: 10 }}>{monthLabel(mesAnterior)} (cinza) x {mesLabel}</div>
+          {comparativo.length === 0 ? (
+            <div style={{ color: C.muted, fontSize: 13, padding: "16px 0", textAlign: "center" }}>Sem custos nos dois meses para comparar.</div>
+          ) : (
+            <>
+              <div style={{ width: "100%", height: 170 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={comparativo} barGap={3}>
+                    <XAxis dataKey="fonte" interval={0} tick={{ fontSize: 10, fill: C.faint }} axisLine={{ stroke: C.border }} tickLine={false}
+                      tickFormatter={(v) => v.replace("Conta ", "").replace("Débito Automático", "Déb. Auto.")} />
+                    <YAxis hide />
+                    <Tooltip formatter={(v) => fmtBRL(v)} contentStyle={{ borderRadius: 10, border: "none", background: C.card, boxShadow: shadowMd, fontSize: 12.5, color: C.ink }} itemStyle={{ color: C.ink }} labelStyle={{ color: C.muted }} />
+                    <Bar dataKey="Anterior" fill="#5C6485" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="Atual" fill="url(#gPago)" radius={[4, 4, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+              {variacoes[0] && (
+                <div style={{ fontSize: 12, color: C.muted, marginTop: 8 }}>
+                  Maior variação: <strong style={{ color: C.ink }}>{variacoes[0].fonte}</strong>{" "}
+                  <strong style={{ color: variacoes[0].pct > 0 ? C.coral : C.emerald }}>{variacoes[0].pct > 0 ? "+" : ""}{variacoes[0].pct.toFixed(0)}%</strong>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        <div className="in" style={{ background: C.card, boxShadow: shadowSm, borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "280ms" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
+            <span style={{ fontWeight: 700, fontSize: 13.5, color: C.ink }}>Saldo acumulado — {ano}</span>
+            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, fontWeight: 700, color: acumColor }}>{hidden ? "•••" : fmtBRL(acumAtual)}</span>
+          </div>
+          <div style={{ fontSize: 11.5, color: C.faint, marginBottom: 10 }}>Soma dos saldos mês a mês desde janeiro</div>
+          <div style={{ width: "100%", height: 170 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={acumulado}>
+                <defs>
+                  <linearGradient id="gAcum" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor={acumColor} stopOpacity={0.45} /><stop offset="100%" stopColor={acumColor} stopOpacity={0.02} />
+                  </linearGradient>
+                </defs>
+                <XAxis dataKey="mes" tick={{ fontSize: 11, fill: C.faint }} axisLine={{ stroke: C.border }} tickLine={false} />
+                <YAxis hide />
+                <ReferenceLine y={0} stroke={C.border} />
+                <Tooltip formatter={(v) => fmtBRL(v)} contentStyle={{ borderRadius: 10, border: "none", background: C.card, boxShadow: shadowMd, fontSize: 12.5, color: C.ink }} itemStyle={{ color: C.ink }} labelStyle={{ color: C.muted }} />
+                <Area type="monotone" dataKey="Acumulado" stroke={acumColor} strokeWidth={2.5} fill="url(#gAcum)" dot={false} connectNulls={false} />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
         </div>
       </div>
     </div>
@@ -973,7 +1342,7 @@ function CardList({ rows, onRemove, onEdit, empty, render }) {
         }}>
           <div style={{ position: "absolute", left: 0, top: 12, bottom: 12, width: 3, borderRadius: 3, background: STATUS_ACCENT[row.status] || C.border }} />
           {render(row)}
-          <button onClick={(e) => { e.stopPropagation(); onRemove(row.id); }} title="Remover" style={{
+          <button onClick={(e) => { e.stopPropagation(); if (window.confirm("Remover este item?")) onRemove(row.id); }} title="Remover" style={{
             border: "none", background: "transparent", color: C.faint, cursor: "pointer",
             padding: 4, display: "flex", alignItems: "center", flexShrink: 0
           }}>
@@ -1057,6 +1426,10 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate }) {
 
       <FilterBar>
         <Field label="Mês"><TextInput type="month" value={mesFiltro} onChange={e => setMesFiltro(e.target.value)} /></Field>
+        <div style={{ display: "flex", gap: 6 }}>
+          <button type="button" onClick={() => setMesFiltro(m => shiftMonth(m, -1))} style={monthNavBtnStyle} aria-label="Mês anterior">‹</button>
+          <button type="button" onClick={() => setMesFiltro(m => shiftMonth(m, 1))} style={monthNavBtnStyle} aria-label="Próximo mês">›</button>
+        </div>
         <Field label="Fonte"><SelectInput options={["Todas", ...FONTES]} value={fonteFiltro} onChange={e => setFonteFiltro(e.target.value)} /></Field>
       </FilterBar>
 
@@ -1075,7 +1448,7 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate }) {
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
                   <Pie data={Object.entries(totals.porFonte).map(([name,value])=>({name,value}))} dataKey="value" nameKey="name" innerRadius={28} outerRadius={48} paddingAngle={2}>
-                    {Object.keys(totals.porFonte).map((_, i) => <Cell key={i} fill={CHART_PALETTE[i % CHART_PALETTE.length]} />)}
+                    {Object.keys(totals.porFonte).map((f) => <Cell key={f} fill={fonteColor(f)} />)}
                   </Pie>
                   <Tooltip formatter={(v) => fmtBRL(v)} contentStyle={{ borderRadius: 10, border: "none", background: C.card, boxShadow: shadowMd, fontSize: 12, color: C.ink }} itemStyle={{ color: C.ink }} labelStyle={{ color: C.muted }} />
                 </PieChart>
@@ -1084,7 +1457,7 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate }) {
             <div style={{ display: "flex", flexDirection: "column", gap: 5, flex: 1, minWidth: 130 }}>
               {Object.entries(totals.porFonte).map(([f,v],i) => (
                 <div key={f} style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12 }}>
-                  <span style={{ width: 8, height: 8, borderRadius: 3, background: CHART_PALETTE[i % CHART_PALETTE.length], flexShrink: 0 }} />
+                  <span style={{ width: 8, height: 8, borderRadius: 3, background: fonteColor(f), flexShrink: 0 }} />
                   <span style={{ color: C.ink, flex: 1 }}>{f}</span>
                   <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: C.muted, fontSize: 11.5 }}>{fmtBRL(v)}</span>
                 </div>
@@ -1136,7 +1509,7 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate }) {
                       <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 700, fontSize: 17, color: C.ink, flexShrink: 0 }}>
                         {fmtBRL(c.valorPago ?? c.valorPrevisto)}
                       </div>
-                      <button onClick={(e) => { e.stopPropagation(); onRemove(c.id); }} title="Remover" style={{
+                      <button onClick={(e) => { e.stopPropagation(); if (window.confirm("Remover este custo?")) onRemove(c.id); }} title="Remover" style={{
                         border: "none", background: "transparent", color: C.faint, cursor: "pointer",
                         padding: 4, display: "flex", alignItems: "center", flexShrink: 0
                       }}>
@@ -1161,7 +1534,7 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate }) {
             <Field label="Valor Pago (R$)"><TextInput type="number" step="0.01" value={form.valorPago} onChange={e=>setForm({...form,valorPago:e.target.value})} /></Field>
             <Field label="Fonte de Pagamento"><SelectInput options={FONTES} value={form.fonte} onChange={e=>setForm({...form,fonte:e.target.value})} /></Field>
             <Field label="Status"><SelectInput options={STATUS_CUSTO} value={form.status} onChange={e=>setForm({...form,status:e.target.value})} /></Field>
-            <Field label="Observações"><TextInput style={{gridColumn:"span 2"}} value={form.obs} onChange={e=>setForm({...form,obs:e.target.value})} /></Field>
+            <Field label="Observações"><TextArea rows={3} style={{gridColumn:"span 2"}} value={form.obs} onChange={e=>setForm({...form,obs:e.target.value})} /></Field>
             <button type="submit" style={{ ...addBtnStyle, gridColumn: "span 2", justifyContent: "center", marginTop: 4 }}>
               <Check size={16}/> {editingId ? "Salvar alterações" : "Salvar custo"}
             </button>
@@ -1181,7 +1554,15 @@ function ReceitasTab({ receitas, onAdd, onRemove, onUpdate }) {
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
 
-  const filtradas = useMemo(() => receitas.filter(r => r.mes === mesFiltro), [receitas, mesFiltro]);
+  const filtradas = useMemo(() => {
+    const list = receitas.filter(r => r.mes === mesFiltro);
+    return [...list].sort((a, b) => {
+      if (!a.dataRecebimento && !b.dataRecebimento) return 0;
+      if (!a.dataRecebimento) return 1;
+      if (!b.dataRecebimento) return -1;
+      return a.dataRecebimento.localeCompare(b.dataRecebimento);
+    });
+  }, [receitas, mesFiltro]);
 
   const totals = useMemo(() => {
     const totalPrevisto = filtradas.reduce((s,r) => s + Number(r.valorPrevisto||0), 0);
@@ -1227,6 +1608,10 @@ function ReceitasTab({ receitas, onAdd, onRemove, onUpdate }) {
 
       <FilterBar>
         <Field label="Mês"><TextInput type="month" value={mesFiltro} onChange={e => setMesFiltro(e.target.value)} /></Field>
+        <div style={{ display: "flex", gap: 6 }}>
+          <button type="button" onClick={() => setMesFiltro(m => shiftMonth(m, -1))} style={monthNavBtnStyle} aria-label="Mês anterior">‹</button>
+          <button type="button" onClick={() => setMesFiltro(m => shiftMonth(m, 1))} style={monthNavBtnStyle} aria-label="Próximo mês">›</button>
+        </div>
       </FilterBar>
 
       <StatRow stats={[
@@ -1244,9 +1629,9 @@ function ReceitasTab({ receitas, onAdd, onRemove, onUpdate }) {
         render={(r) => (
           <>
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontWeight: 700, color: C.ink, fontSize: 15 }}>{r.descricao}</div>
+              <div style={{ fontWeight: 700, color: C.ink, fontSize: 15, textTransform: "uppercase" }}>{r.descricao}</div>
               <div style={{ fontSize: 11.5, color: C.muted, marginTop: 2 }}>
-                Receb. {fmtDate(r.dataRecebimento)} · {r.categoria}{r.contaDestino ? ` · ${r.contaDestino}` : ""}
+                Recebido {fmtDate(r.dataRecebimento)}{r.categoria ? ` · ${r.categoria}` : ""}{r.contaDestino ? ` · ${r.contaDestino}` : ""}
               </div>
             </div>
             <div style={{ textAlign: "right", minWidth: 92 }}>
@@ -1269,7 +1654,7 @@ function ReceitasTab({ receitas, onAdd, onRemove, onUpdate }) {
             <Field label="Valor Recebido (R$)"><TextInput type="number" step="0.01" value={form.valorRecebido} onChange={e=>setForm({...form,valorRecebido:e.target.value})} /></Field>
             <Field label="Conta de Destino"><SelectInput options={FONTES} value={form.contaDestino} onChange={e=>setForm({...form,contaDestino:e.target.value})} /></Field>
             <Field label="Status"><SelectInput options={STATUS_RECEITA} value={form.status} onChange={e=>setForm({...form,status:e.target.value})} /></Field>
-            <Field label="Observações"><TextInput style={{gridColumn:"span 2"}} value={form.obs} onChange={e=>setForm({...form,obs:e.target.value})} /></Field>
+            <Field label="Observações"><TextArea rows={3} style={{gridColumn:"span 2"}} value={form.obs} onChange={e=>setForm({...form,obs:e.target.value})} /></Field>
             <button type="submit" style={{ ...addBtnStyle, gridColumn: "span 2", justifyContent: "center", marginTop: 4 }}>
               <Check size={16}/> {editingId ? "Salvar alterações" : "Salvar receita"}
             </button>
@@ -1434,7 +1819,7 @@ function MonthDetailModal({ resumo, custos, receitas, onClose }) {
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie data={porFonte} dataKey="value" nameKey="name" innerRadius={30} outerRadius={52} paddingAngle={2}>
-                  {porFonte.map((_, i) => <Cell key={i} fill={CHART_PALETTE[i % CHART_PALETTE.length]} />)}
+                  {porFonte.map((f) => <Cell key={f.name} fill={fonteColor(f.name)} />)}
                 </Pie>
                 <Tooltip formatter={(v) => fmtBRL(v)} contentStyle={{ borderRadius: 10, border: "none", background: C.card, boxShadow: shadowMd, fontSize: 12, color: C.ink }} itemStyle={{ color: C.ink }} labelStyle={{ color: C.muted }} />
               </PieChart>
@@ -1443,7 +1828,7 @@ function MonthDetailModal({ resumo, custos, receitas, onClose }) {
           <div style={{ display: "flex", flexDirection: "column", gap: 5, flex: 1, minWidth: 120 }}>
             {porFonte.map((f, i) => (
               <div key={f.name} style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12 }}>
-                <span style={{ width: 8, height: 8, borderRadius: 3, background: CHART_PALETTE[i % CHART_PALETTE.length], flexShrink: 0 }} />
+                <span style={{ width: 8, height: 8, borderRadius: 3, background: fonteColor(f.name), flexShrink: 0 }} />
                 <span style={{ color: C.ink, flex: 1 }}>{f.name}</span>
                 <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: C.muted, fontSize: 11.5 }}>{fmtBRL(f.value)}</span>
               </div>
@@ -1510,7 +1895,7 @@ function DemandasTab({ demandas, onAdd, onRemove, onUpdate, onStatusChange }) {
   const submit = (e) => {
     e.preventDefault();
     if (!form.nome) return;
-    if (editingId) { onUpdate(editingId, form); } else { onAdd(form); }
+    if (editingId) { onUpdate(editingId, form); } else { onAdd({ ...form, criadoEm: todayISO() }); }
     setForm(blank());
     setEditingId(null);
     setShowForm(false);
@@ -1580,9 +1965,14 @@ function DemandasTab({ demandas, onAdd, onRemove, onUpdate, onStatusChange }) {
                     }}>
                       <div style={{ position: "absolute", left: 0, top: 10, bottom: 10, width: 3, borderRadius: 3, background: PRIORIDADE_COLOR[d.prioridade] || C.border }} />
                       <div style={{ fontWeight: 700, color: C.ink, fontSize: 14.5, marginBottom: 3 }}>{d.nome}</div>
-                      <div style={{ fontSize: 11.5, color: C.muted, marginBottom: 10 }}>
+                      <div style={{ fontSize: 11.5, color: C.muted, marginBottom: 3 }}>
                         Prazo {fmtDate(d.prazo)} · {d.prioridade}{d.contato ? ` · ${d.contato}` : ""}{d.detalhes ? ` · ${d.detalhes}` : ""}
                       </div>
+                      {d.criadoEm && (
+                        <div style={{ fontSize: 10.5, color: C.faint, marginBottom: 10 }}>
+                          Criada em {fmtDate(d.criadoEm)}
+                        </div>
+                      )}
                       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                         {col.next && (
                           <button onClick={(e) => { e.stopPropagation(); onStatusChange(d.id, col.next); }} style={{
@@ -1592,7 +1982,7 @@ function DemandasTab({ demandas, onAdd, onRemove, onUpdate, onStatusChange }) {
                             {col.next} <ArrowRight size={12} />
                           </button>
                         )}
-                        <button onClick={(e) => { e.stopPropagation(); onRemove(d.id); }} title="Remover" style={{
+                        <button onClick={(e) => { e.stopPropagation(); if (window.confirm("Remover esta demanda?")) onRemove(d.id); }} title="Remover" style={{
                           border: "none", background: "transparent", color: C.faint, cursor: "pointer",
                           padding: 4, display: "flex", alignItems: "center", marginLeft: "auto"
                         }}>
@@ -1617,7 +2007,7 @@ function DemandasTab({ demandas, onAdd, onRemove, onUpdate, onStatusChange }) {
             <Field label="Prioridade"><SelectInput options={PRIORIDADES} value={form.prioridade} onChange={e=>setForm({...form,prioridade:e.target.value})} /></Field>
             <Field label="Status"><SelectInput options={STATUS_DEMANDA} value={form.status} onChange={e=>setForm({...form,status:e.target.value})} /></Field>
             <Field label="Detalhes"><TextInput style={{gridColumn:"span 2"}} value={form.detalhes} onChange={e=>setForm({...form,detalhes:e.target.value})} /></Field>
-            <Field label="Observações"><TextInput style={{gridColumn:"span 2"}} value={form.obs} onChange={e=>setForm({...form,obs:e.target.value})} /></Field>
+            <Field label="Observações"><TextArea rows={3} style={{gridColumn:"span 2"}} value={form.obs} onChange={e=>setForm({...form,obs:e.target.value})} /></Field>
             <button type="submit" style={{ ...addBtnStyle, gridColumn: "span 2", justifyContent: "center", marginTop: 4 }}>
               <Check size={16}/> {editingId ? "Salvar alterações" : "Salvar demanda"}
             </button>
@@ -1632,4 +2022,9 @@ const addBtnStyle = {
   display: "flex", alignItems: "center", gap: 6, background: C.emerald, color: "#fff",
   border: "none", borderRadius: 14, padding: "12px 18px", fontSize: 14, fontWeight: 700,
   cursor: "pointer", boxShadow: "0 6px 16px rgba(0,200,150,0.35)"
+};
+const monthNavBtnStyle = {
+  border: `1px solid ${C.border}`, background: C.card, color: C.ink, borderRadius: 10,
+  width: 40, height: 40, fontSize: 16, fontWeight: 700, cursor: "pointer",
+  display: "flex", alignItems: "center", justifyContent: "center"
 };
