@@ -90,11 +90,7 @@ function parseQuickEntry(rawText) {
   let valor = 0;
   const valorMatches = [...text.matchAll(/\d{1,3}(?:\.\d{3})*(?:,\d{1,2})?|\d+(?:,\d{1,2})?/g)];
   if (valorMatches.length) {
-    const parsed = valorMatches.map(m => {
-      let numStr = m[0];
-      numStr = numStr.includes(",") ? numStr.replace(/\./g, "").replace(",", ".") : numStr;
-      return { raw: m[0], value: parseFloat(numStr) || 0 };
-    });
+    const parsed = valorMatches.map(m => ({ raw: m[0], value: parseValorBR(m[0]) }));
     // The money amount is virtually always the largest number in a short entry —
     // day-of-month remnants and item counts ("parcela 3") are small by comparison.
     const best = parsed.reduce((a, b) => (b.value > a.value ? b : a));
@@ -102,15 +98,41 @@ function parseQuickEntry(rawText) {
     text = text.replace(best.raw, " ");
   }
 
-  text = text.replace(/\br\$/gi, " ").replace(/\breais?\b/gi, " ").replace(/\s+/g, " ").trim();
-  const descricao = text ? text.charAt(0).toUpperCase() + text.slice(1) : "";
+  // Drop connector/filler words so only the subject remains — "Recebi aluguel do
+  // VIA IPIRANGA, no dia 10, no valor de 3500" -> "ALUGUEL VIA IPIRANGA".
+  text = text
+    .replace(/\br\$/gi, " ").replace(/\breais?\b/gi, " ")
+    .replace(/\bno valor de\b/gi, " ").replace(/\bvalor de\b/gi, " ")
+    .replace(/\bno dia\b/gi, " ").replace(/\bpagamento de\b/gi, " ")
+    .replace(/\brecebi\b/gi, " ").replace(/\bpaguei\b/gi, " ")
+    .replace(/[,.]/g, " ")
+    .replace(/\b(de|da|do)\b/gi, " ")
+    .replace(/\s+/g, " ").trim();
+  const descricao = text.toUpperCase();
 
   const isReceita = /receb|sal[áa]rio|entrada|venda|renda|dep[óo]sito/i.test(lower);
+  const jaRecebido = /\breceb/i.test(lower);
+  const jaPago = /\bpagu?ei\b|\bpago\b/i.test(lower);
+  const status = isReceita ? (jaRecebido ? "Recebido" : "Pendente") : (jaPago ? "Pago" : "Pendente");
 
-  return { tipo: isReceita ? "receita" : "custo", descricao: descricao || "Novo lançamento", valor, data: dataStr };
+  return { tipo: isReceita ? "receita" : "custo", descricao: descricao || "NOVO LANÇAMENTO", valor, data: dataStr, status };
 }
 const todayISO = () => new Date().toISOString().slice(0,10);
 const currentMonth = () => new Date().toISOString().slice(0,7);
+const parseValorBR = (raw) => {
+  if (raw === null || raw === undefined || raw === "") return 0;
+  let s = String(raw).trim().replace(/[^\d.,-]/g, "");
+  if (!s) return 0;
+  if (s.includes(",")) {
+    // Vírgula presente: pontos são milhar, vírgula é decimal — "5.806,00" -> 5806.00
+    s = s.replace(/\./g, "").replace(",", ".");
+  } else if ((s.match(/\./g) || []).length > 1 || /\.\d{3}$/.test(s)) {
+    // Só pontos, em grupos de 3 (ou mais de um ponto) -> são todos separadores de milhar — "5.806" -> 5806
+    s = s.replace(/\./g, "");
+  }
+  // Caso contrário (um único ponto com 1-2 dígitos depois, ex. "5.8") já é o decimal certo.
+  return parseFloat(s) || 0;
+};
 const shiftMonth = (mes, delta) => {
   const [y, m] = mes.split("-").map(Number);
   const d = new Date(y, (m - 1) + delta, 1);
@@ -346,13 +368,14 @@ function Modal({ title, onClose, children }) {
   return (
     <div style={{
       position: "fixed", inset: 0, background: "#151A2E99", zIndex: 50,
-      display: "flex", alignItems: "flex-end", justifyContent: "center"
+      display: "flex", alignItems: "flex-end", justifyContent: "center",
+      padding: "0 0 min(5vh, 36px)"
     }} onClick={onClose}>
       <div
         onClick={e => e.stopPropagation()}
         style={{
-          background: C.card, width: "100%", maxWidth: 560, maxHeight: "88vh",
-          borderRadius: "22px 22px 0 0", padding: "22px 20px 28px", overflowY: "auto",
+          background: C.card, width: "100%", maxWidth: "min(94vw, 860px)", maxHeight: "84vh",
+          borderRadius: 24, padding: "28px 28px 32px", overflowY: "auto",
           boxShadow: "0 -8px 30px #0004", animation: "slideUp .25s ease-out"
         }}
       >
@@ -462,19 +485,21 @@ function QuickAddFab({ onAddCusto, onAddReceita }) {
     if (!draft.descricao || !draft.data || draft.valor === "") return;
     const mes = draft.data.slice(0, 7);
     const anoNum = parseInt(draft.data.slice(0, 4), 10);
-    const valorNum = parseFloat(draft.valor) || 0;
+    const valorNum = parseValorBR(draft.valor);
+    const status = draft.status || "Pendente";
     if (draft.tipo === "custo") {
       onAddCusto({
-        mes, ano: anoNum, descricao: draft.descricao, vencimento: draft.data, dataPagamento: "",
-        valorPrevisto: valorNum, valorPago: null,
-        fonte: draft.fonte || FONTES[0], status: draft.status || "Pendente", obs: ""
+        mes, ano: anoNum, descricao: draft.descricao,
+        vencimento: draft.data, dataPagamento: status === "Pago" ? draft.data : "",
+        valorPrevisto: valorNum, valorPago: status === "Pago" ? valorNum : null,
+        fonte: draft.fonte || FONTES[0], status, obs: ""
       });
     } else {
       onAddReceita({
         mes, ano: anoNum, descricao: draft.descricao, dataRecebimento: draft.data,
-        valorPrevisto: valorNum, valorRecebido: null,
+        valorPrevisto: valorNum, valorRecebido: status === "Recebido" ? valorNum : null,
         categoria: draft.categoria || "", contaDestino: draft.fonte || FONTES[1],
-        status: draft.status || "Pendente", obs: ""
+        status, obs: ""
       });
     }
     reset();
@@ -520,7 +545,7 @@ function QuickAddFab({ onAddCusto, onAddReceita }) {
                 ))}
               </div>
             </Field>
-            <Field label="Valor (R$)"><TextInput type="number" step="0.01" value={draft.valor} onChange={e => setDraft({ ...draft, valor: e.target.value })} /></Field>
+            <Field label="Valor (R$)"><TextInput type="text" inputMode="decimal" placeholder="0,00" value={draft.valor} onChange={e => setDraft({ ...draft, valor: e.target.value })} /></Field>
             <Field label="Descrição"><TextInput style={{ gridColumn: "span 2" }} value={draft.descricao} onChange={e => setDraft({ ...draft, descricao: e.target.value })} /></Field>
             <Field label={draft.tipo === "custo" ? "Vencimento" : "Recebimento"}>
               <TextInput type="date" value={draft.data} onChange={e => setDraft({ ...draft, data: e.target.value })} />
@@ -628,6 +653,8 @@ export default function App() {
   const [demandas, setDemandas] = useState([]);
   const [loadedFlags, setLoadedFlags] = useState({ custos: false, receitas: false, demandas: false });
   const [tab, setTab] = useState("dashboard");
+  const [jumpTarget, setJumpTarget] = useState(null);
+  const goToItem = (tab, id) => { setTab(tab); setJumpTarget({ tab, id }); };
   const [saveError, setSaveError] = useState(false);
   const fileInputRef = useRef(null);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -853,11 +880,11 @@ export default function App() {
       </div>
 
       <main style={{ maxWidth: 1080, margin: "0 auto", padding: "20px 20px 0" }}>
-        {tab === "dashboard" && <DashboardTab custos={data.custos} receitas={data.receitas} demandas={data.demandas} onNavigate={setTab} />}
-        {tab === "custos" && <CustosTab custos={data.custos} onAdd={addCusto} onRemove={removeCusto} onUpdate={updateCusto} />}
+        {tab === "dashboard" && <DashboardTab custos={data.custos} receitas={data.receitas} demandas={data.demandas} onNavigate={goToItem} />}
+        {tab === "custos" && <CustosTab custos={data.custos} onAdd={addCusto} onRemove={removeCusto} onUpdate={updateCusto} jumpTarget={jumpTarget && jumpTarget.tab === "custos" ? jumpTarget : null} onConsumeJump={() => setJumpTarget(null)} />}
         {tab === "receitas" && <ReceitasTab receitas={data.receitas} onAdd={addReceita} onRemove={removeReceita} onUpdate={updateReceita} />}
         {tab === "resumo" && <ResumoTab custos={data.custos} receitas={data.receitas} />}
-        {tab === "demandas" && <DemandasTab demandas={data.demandas} onAdd={addDemanda} onRemove={removeDemanda} onUpdate={updateDemanda} onStatusChange={updateDemandaStatus} />}
+        {tab === "demandas" && <DemandasTab demandas={data.demandas} onAdd={addDemanda} onRemove={removeDemanda} onUpdate={updateDemanda} onStatusChange={updateDemandaStatus} jumpTarget={jumpTarget && jumpTarget.tab === "demandas" ? jumpTarget : null} onConsumeJump={() => setJumpTarget(null)} />}
       </main>
 
       <BottomNav tab={tab} setTab={setTab} />
@@ -941,10 +968,10 @@ function BalanceHero({ saldo, mesLabel, hidden, onToggle, saldosPorMes }) {
 
 // Overdue or due-within-7-days custos/demandas, surfaced at the very top
 // of the dashboard so nothing urgent needs to be hunted for.
-function useAtencao(custos, demandas) {
+function useAtencao(custos, demandas, dias = 7) {
   return useMemo(() => {
     const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
-    const limite = new Date(hoje); limite.setDate(limite.getDate() + 7);
+    const limite = new Date(hoje); limite.setDate(limite.getDate() + dias);
     const toDateObj = (s) => {
       if (!s) return null;
       const [y, m, d] = s.split("-").map(Number);
@@ -953,38 +980,38 @@ function useAtencao(custos, demandas) {
     };
     const itensCusto = custos
       .filter(c => c.status !== "Pago" && c.vencimento)
-      .map(c => ({ id: `c-${c.id}`, tab: "custos", label: c.descricao, data: c.vencimento, dateObj: toDateObj(c.vencimento) }))
+      .map(c => ({ id: `c-${c.id}`, rawId: c.id, tab: "custos", label: c.descricao, data: c.vencimento, dateObj: toDateObj(c.vencimento) }))
       .filter(i => i.dateObj && i.dateObj <= limite);
     const itensDemanda = demandas
       .filter(d => d.status !== "Concluída" && d.prazo)
-      .map(d => ({ id: `d-${d.id}`, tab: "demandas", label: d.nome, data: d.prazo, dateObj: toDateObj(d.prazo) }))
+      .map(d => ({ id: `d-${d.id}`, rawId: d.id, tab: "demandas", label: d.nome, data: d.prazo, dateObj: toDateObj(d.prazo) }))
       .filter(i => i.dateObj && i.dateObj <= limite);
     return [...itensCusto, ...itensDemanda]
       .map(i => ({ ...i, atrasado: i.dateObj < hoje }))
       .sort((a, b) => a.dateObj - b.dateObj);
-  }, [custos, demandas]);
+  }, [custos, demandas, dias]);
 }
 
-function AttentionCard({ itens, onNavigate }) {
+function AttentionCard({ itens, onNavigate, title = "Precisa de atenção", limit = 6 }) {
   if (itens.length === 0) return null;
   return (
     <div className="in" style={{ background: C.card, boxShadow: shadowSm, borderRadius: 18, padding: "16px 18px", marginBottom: 20 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
         <AlertCircle size={16} color={C.coral} />
-        <span style={{ fontWeight: 700, fontSize: 13, color: C.ink, textTransform: "uppercase", letterSpacing: 0.4 }}>Precisa de atenção</span>
+        <span style={{ fontWeight: 700, fontSize: 13, color: C.ink, textTransform: "uppercase", letterSpacing: 0.4 }}>{title}</span>
         <span style={{ fontSize: 11, fontWeight: 700, color: C.coral, background: C.coralSoft, borderRadius: 10, padding: "1px 8px" }}>
           {itens.length}
         </span>
       </div>
       <div style={{ display: "flex", flexDirection: "column" }}>
-        {itens.slice(0, 6).map((item, i) => (
+        {itens.slice(0, limit).map((item, i) => (
           <div
             key={item.id}
             className="tap"
-            onClick={() => onNavigate && onNavigate(item.tab)}
+            onClick={() => onNavigate && onNavigate(item.tab, item.rawId)}
             style={{
               display: "flex", alignItems: "center", gap: 10, cursor: onNavigate ? "pointer" : "default",
-              padding: "9px 2px", borderBottom: i < Math.min(itens.length, 6) - 1 ? `1px solid ${C.border}` : "none"
+              padding: "9px 2px", borderBottom: i < Math.min(itens.length, limit) - 1 ? `1px solid ${C.border}` : "none"
             }}
           >
             <Clock size={14} color={item.atrasado ? C.coral : C.amber} style={{ flexShrink: 0 }} />
@@ -1021,6 +1048,14 @@ function DashboardTab({ custos, receitas, demandas, onNavigate }) {
   const ano = new Date().getFullYear();
   const mesAtual = currentMonth();
   const atencao = useAtencao(custos, demandas);
+  const proximos30 = useAtencao(custos, demandas, 30);
+
+  const receitasComparativo = useMemo(() => {
+    return receitas.filter(r => r.mes === mesAtual)
+      .map(r => ({ nome: r.descricao, Previsto: Number(r.valorPrevisto || 0), Recebido: Number(r.valorRecebido || 0) }))
+      .sort((a, b) => b.Previsto - a.Previsto)
+      .slice(0, 6);
+  }, [receitas, mesAtual]);
 
   const saldosPorMes = useMemo(() => MESES.map((_, idx) => {
     const mesKey = `${ano}-${String(idx + 1).padStart(2, "0")}`;
@@ -1051,16 +1086,16 @@ function DashboardTab({ custos, receitas, demandas, onNavigate }) {
     const map = {};
     receitas.filter(r => r.mes === mesAtual).forEach(r => {
       const v = Number(r.valorRecebido ?? r.valorPrevisto ?? 0);
-      const key = r.categoria || "Outras";
+      const key = r.descricao || "Outras";
       map[key] = (map[key] || 0) + v;
     });
     return Object.entries(map).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
   }, [receitas, mesAtual]);
 
   const catColor = useMemo(() => {
-    const cats = [...new Set(receitas.map(r => r.categoria || "Outras"))].sort();
-    return (name) => PALETTE_IN[Math.max(0, cats.indexOf(name)) % PALETTE_IN.length];
-  }, [receitas]);
+    const titulos = [...new Set(receitas.filter(r => r.mes === mesAtual).map(r => r.descricao || "Outras"))].sort();
+    return (name) => PALETTE_IN[Math.max(0, titulos.indexOf(name)) % PALETTE_IN.length];
+  }, [receitas, mesAtual]);
 
   const tendencia = useMemo(() => {
     const out = [];
@@ -1189,7 +1224,7 @@ function DashboardTab({ custos, receitas, demandas, onNavigate }) {
         </div>
 
         <div className="in" style={{ background: C.card, boxShadow: shadowSm, borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "120ms" }}>
-          <div style={{ fontWeight: 700, fontSize: 13.5, color: C.ink, marginBottom: 10 }}>Receitas por categoria — {mesLabel}</div>
+          <div style={{ fontWeight: 700, fontSize: 13.5, color: C.ink, marginBottom: 10 }}>Receitas por título — {mesLabel}</div>
           {porCategoria.length === 0 ? (
             <div style={{ color: C.muted, fontSize: 13, padding: "16px 0", textAlign: "center" }}>Sem receitas lançadas neste mês.</div>
           ) : (
@@ -1268,10 +1303,11 @@ function DashboardTab({ custos, receitas, demandas, onNavigate }) {
             <div style={{ color: C.muted, fontSize: 13, padding: "16px 0", textAlign: "center" }}>Sem custos nos dois meses para comparar.</div>
           ) : (
             <>
-              <div style={{ width: "100%", height: 170 }}>
+              <div style={{ width: "100%", height: 200 }}>
                 <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={comparativo} barGap={3}>
-                    <XAxis dataKey="fonte" interval={0} tick={{ fontSize: 10, fill: C.faint }} axisLine={{ stroke: C.border }} tickLine={false}
+                  <BarChart data={comparativo} barGap={3} margin={{ bottom: 24 }}>
+                    <XAxis dataKey="fonte" interval={0} angle={-35} textAnchor="end" height={50}
+                      tick={{ fontSize: 9.5, fill: C.faint }} axisLine={{ stroke: C.border }} tickLine={false}
                       tickFormatter={(v) => v.replace("Conta ", "").replace("Débito Automático", "Déb. Auto.")} />
                     <YAxis hide />
                     <Tooltip formatter={(v) => fmtBRL(v)} contentStyle={{ borderRadius: 10, border: "none", background: C.card, boxShadow: shadowMd, fontSize: 12.5, color: C.ink }} itemStyle={{ color: C.ink }} labelStyle={{ color: C.muted }} />
@@ -1313,6 +1349,29 @@ function DashboardTab({ custos, receitas, demandas, onNavigate }) {
             </ResponsiveContainer>
           </div>
         </div>
+        <div className="in" style={{ background: C.card, boxShadow: shadowSm, borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "320ms" }}>
+          <div style={{ fontWeight: 700, fontSize: 13.5, color: C.ink, marginBottom: 4 }}>Receitas previstas x recebidas — {mesLabel}</div>
+          <div style={{ fontSize: 11.5, color: C.faint, marginBottom: 10 }}>Cinza é o previsto, verde é o que já entrou</div>
+          {receitasComparativo.length === 0 ? (
+            <div style={{ color: C.muted, fontSize: 13, padding: "16px 0", textAlign: "center" }}>Sem receitas lançadas neste mês.</div>
+          ) : (
+            <div style={{ width: "100%", height: 220 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={receitasComparativo} barGap={3} margin={{ bottom: 30 }}>
+                  <XAxis dataKey="nome" interval={0} angle={-35} textAnchor="end" height={60}
+                    tick={{ fontSize: 9, fill: C.faint }} axisLine={{ stroke: C.border }} tickLine={false}
+                    tickFormatter={(v) => v.length > 8 ? v.slice(0, 8) + "…" : v} />
+                  <YAxis hide />
+                  <Tooltip formatter={(v) => fmtBRL(v)} contentStyle={{ borderRadius: 10, border: "none", background: C.card, boxShadow: shadowMd, fontSize: 12.5, color: C.ink }} itemStyle={{ color: C.ink }} labelStyle={{ color: C.muted }} />
+                  <Bar dataKey="Previsto" fill="#5C6485" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="Recebido" fill={C.emerald} radius={[4, 4, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+        </div>
+
+        <AttentionCard itens={proximos30} onNavigate={onNavigate} title="Próximos vencimentos (30 dias)" limit={8} />
       </div>
     </div>
   );
@@ -1354,7 +1413,7 @@ function CardList({ rows, onRemove, onEdit, empty, render }) {
   );
 }
 
-function CustosTab({ custos, onAdd, onRemove, onUpdate }) {
+function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJump }) {
   const [mesFiltro, setMesFiltro] = useState(currentMonth());
   const [fonteFiltro, setFonteFiltro] = useState("Todas");
   const [showForm, setShowForm] = useState(false);
@@ -1398,10 +1457,17 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate }) {
     setShowForm(true);
   };
 
+  useEffect(() => {
+    if (!jumpTarget) return;
+    const item = custos.find(c => c.id === jumpTarget.id);
+    if (item) { setMesFiltro(item.mes); openEdit(item); }
+    onConsumeJump();
+  }, [jumpTarget]);
+
   const submit = (e) => {
     e.preventDefault();
     if (!form.descricao || !form.vencimento || form.valorPrevisto === "") return;
-    const payload = { ...form, valorPrevisto: parseFloat(form.valorPrevisto)||0, valorPago: form.valorPago === "" ? null : parseFloat(form.valorPago) };
+    const payload = { ...form, valorPrevisto: parseValorBR(form.valorPrevisto), valorPago: form.valorPago === "" ? null : parseValorBR(form.valorPago) };
     if (editingId) { onUpdate(editingId, payload); } else { onAdd(payload); }
     setForm(blankCusto(mesFiltro));
     setEditingId(null);
@@ -1530,8 +1596,8 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate }) {
             <Field label="Descrição / Categoria"><TextInput style={{gridColumn:"span 2"}} required value={form.descricao} onChange={e=>setForm({...form,descricao:e.target.value})} /></Field>
             <Field label="Vencimento"><TextInput type="date" required value={form.vencimento} onChange={e=>setForm({...form,vencimento:e.target.value})} /></Field>
             <Field label="Data Pagamento"><TextInput type="date" value={form.dataPagamento} onChange={e=>setForm({...form,dataPagamento:e.target.value})} /></Field>
-            <Field label="Valor Previsto (R$)"><TextInput type="number" step="0.01" required value={form.valorPrevisto} onChange={e=>setForm({...form,valorPrevisto:e.target.value})} /></Field>
-            <Field label="Valor Pago (R$)"><TextInput type="number" step="0.01" value={form.valorPago} onChange={e=>setForm({...form,valorPago:e.target.value})} /></Field>
+            <Field label="Valor Previsto (R$)"><TextInput type="text" inputMode="decimal" placeholder="0,00" required value={form.valorPrevisto} onChange={e=>setForm({...form,valorPrevisto:e.target.value})} /></Field>
+            <Field label="Valor Pago (R$)"><TextInput type="text" inputMode="decimal" placeholder="0,00" value={form.valorPago} onChange={e=>setForm({...form,valorPago:e.target.value})} /></Field>
             <Field label="Fonte de Pagamento"><SelectInput options={FONTES} value={form.fonte} onChange={e=>setForm({...form,fonte:e.target.value})} /></Field>
             <Field label="Status"><SelectInput options={STATUS_CUSTO} value={form.status} onChange={e=>setForm({...form,status:e.target.value})} /></Field>
             <Field label="Observações"><TextArea rows={3} style={{gridColumn:"span 2"}} value={form.obs} onChange={e=>setForm({...form,obs:e.target.value})} /></Field>
@@ -1592,7 +1658,7 @@ function ReceitasTab({ receitas, onAdd, onRemove, onUpdate }) {
   const submit = (e) => {
     e.preventDefault();
     if (!form.descricao || !form.dataRecebimento || form.valorPrevisto === "") return;
-    const payload = { ...form, valorPrevisto: parseFloat(form.valorPrevisto)||0, valorRecebido: form.valorRecebido === "" ? null : parseFloat(form.valorRecebido) };
+    const payload = { ...form, valorPrevisto: parseValorBR(form.valorPrevisto), valorRecebido: form.valorRecebido === "" ? null : parseValorBR(form.valorRecebido) };
     if (editingId) { onUpdate(editingId, payload); } else { onAdd(payload); }
     setForm(blankReceita(mesFiltro));
     setEditingId(null);
@@ -1650,8 +1716,8 @@ function ReceitasTab({ receitas, onAdd, onRemove, onUpdate }) {
             <Field label="Descrição / Origem"><TextInput style={{gridColumn:"span 2"}} required value={form.descricao} onChange={e=>setForm({...form,descricao:e.target.value})} /></Field>
             <Field label="Data Recebimento"><TextInput type="date" required value={form.dataRecebimento} onChange={e=>setForm({...form,dataRecebimento:e.target.value})} /></Field>
             <Field label="Categoria"><TextInput value={form.categoria} onChange={e=>setForm({...form,categoria:e.target.value})} /></Field>
-            <Field label="Valor Previsto (R$)"><TextInput type="number" step="0.01" required value={form.valorPrevisto} onChange={e=>setForm({...form,valorPrevisto:e.target.value})} /></Field>
-            <Field label="Valor Recebido (R$)"><TextInput type="number" step="0.01" value={form.valorRecebido} onChange={e=>setForm({...form,valorRecebido:e.target.value})} /></Field>
+            <Field label="Valor Previsto (R$)"><TextInput type="text" inputMode="decimal" placeholder="0,00" required value={form.valorPrevisto} onChange={e=>setForm({...form,valorPrevisto:e.target.value})} /></Field>
+            <Field label="Valor Recebido (R$)"><TextInput type="text" inputMode="decimal" placeholder="0,00" value={form.valorRecebido} onChange={e=>setForm({...form,valorRecebido:e.target.value})} /></Field>
             <Field label="Conta de Destino"><SelectInput options={FONTES} value={form.contaDestino} onChange={e=>setForm({...form,contaDestino:e.target.value})} /></Field>
             <Field label="Status"><SelectInput options={STATUS_RECEITA} value={form.status} onChange={e=>setForm({...form,status:e.target.value})} /></Field>
             <Field label="Observações"><TextArea rows={3} style={{gridColumn:"span 2"}} value={form.obs} onChange={e=>setForm({...form,obs:e.target.value})} /></Field>
@@ -1869,7 +1935,7 @@ function MonthDetailModal({ resumo, custos, receitas, onClose }) {
 /*  Demandas                                                            */
 /* ------------------------------------------------------------------ */
 
-function DemandasTab({ demandas, onAdd, onRemove, onUpdate, onStatusChange }) {
+function DemandasTab({ demandas, onAdd, onRemove, onUpdate, onStatusChange, jumpTarget, onConsumeJump }) {
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
 
@@ -1891,6 +1957,13 @@ function DemandasTab({ demandas, onAdd, onRemove, onUpdate, onStatusChange }) {
     });
     setShowForm(true);
   };
+
+  useEffect(() => {
+    if (!jumpTarget) return;
+    const item = demandas.find(d => d.id === jumpTarget.id);
+    if (item) openEdit(item);
+    onConsumeJump();
+  }, [jumpTarget]);
 
   const submit = (e) => {
     e.preventDefault();
