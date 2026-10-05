@@ -139,6 +139,27 @@ const shiftMonth = (mes, delta) => {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 };
 
+/* ------------------------------------------------------------------ */
+/*  Validação de dados                                                 */
+/* ------------------------------------------------------------------ */
+// Item 1: valor precisa ser > 0 — bloqueia o salvamento.
+const isValorValido = (n) => Number.isFinite(n) && n > 0;
+
+// Item 2: data muito distante do presente — apenas avisa, não bloqueia.
+const isDateImplausible = (dateStr) => {
+  if (!dateStr) return false;
+  const d = new Date(`${dateStr}T00:00:00`);
+  if (isNaN(d.getTime())) return false;
+  const diffYears = Math.abs(d.getFullYear() - new Date().getFullYear());
+  return diffYears >= 5;
+};
+const confirmDateSanity = (dateStr, label = "data") => {
+  if (!isDateImplausible(dateStr)) return true;
+  return window.confirm(
+    `A ${label} informada (${fmtDate(dateStr)}) parece muito distante da data de hoje. Confirma que está correta?`
+  );
+};
+
 function exportToExcel(data) {
   const wb = XLSX.utils.book_new();
 
@@ -472,37 +493,56 @@ function QuickAddFab({ onAddCusto, onAddReceita }) {
   const [step, setStep] = useState("input");
   const [text, setText] = useState("");
   const [draft, setDraft] = useState(null);
+  const [saving, setSaving] = useState(false);
 
-  const reset = () => { setOpen(false); setStep("input"); setText(""); setDraft(null); };
+  const reset = () => { setOpen(false); setStep("input"); setText(""); setDraft(null); setSaving(false); };
 
   const analisar = () => {
     if (!text.trim()) return;
-    setDraft(parseQuickEntry(text));
+    const parsed = parseQuickEntry(text);
+    if (!isValorValido(parsed.valor)) {
+      const continuar = window.confirm(
+        "Não encontrei nenhum valor no texto digitado. Quer continuar e preencher o valor manualmente na próxima tela?"
+      );
+      if (!continuar) return;
+    }
+    setDraft(parsed);
     setStep("review");
   };
 
-  const salvar = () => {
+  const salvar = async () => {
+    if (saving) return;
     if (!draft.descricao || !draft.data || draft.valor === "") return;
+    const valorNum = parseValorBR(draft.valor);
+    if (!isValorValido(valorNum)) {
+      alert("O valor precisa ser maior que zero.");
+      return;
+    }
+    if (!confirmDateSanity(draft.data, draft.tipo === "custo" ? "data de vencimento" : "data de recebimento")) return;
     const mes = draft.data.slice(0, 7);
     const anoNum = parseInt(draft.data.slice(0, 4), 10);
-    const valorNum = parseValorBR(draft.valor);
     const status = draft.status || "Pendente";
-    if (draft.tipo === "custo") {
-      onAddCusto({
-        mes, ano: anoNum, descricao: draft.descricao,
-        vencimento: draft.data, dataPagamento: status === "Pago" ? draft.data : "",
-        valorPrevisto: valorNum, valorPago: status === "Pago" ? valorNum : null,
-        fonte: draft.fonte || FONTES[0], status, obs: ""
-      });
-    } else {
-      onAddReceita({
-        mes, ano: anoNum, descricao: draft.descricao, dataRecebimento: draft.data,
-        valorPrevisto: valorNum, valorRecebido: status === "Recebido" ? valorNum : null,
-        categoria: draft.categoria || "", contaDestino: draft.fonte || FONTES[1],
-        status, obs: ""
-      });
+    setSaving(true);
+    try {
+      if (draft.tipo === "custo") {
+        await onAddCusto({
+          mes, ano: anoNum, descricao: draft.descricao,
+          vencimento: draft.data, dataPagamento: status === "Pago" ? draft.data : "",
+          valorPrevisto: valorNum, valorPago: status === "Pago" ? valorNum : null,
+          fonte: draft.fonte || FONTES[0], status, obs: ""
+        });
+      } else {
+        await onAddReceita({
+          mes, ano: anoNum, descricao: draft.descricao, dataRecebimento: draft.data,
+          valorPrevisto: valorNum, valorRecebido: status === "Recebido" ? valorNum : null,
+          categoria: draft.categoria || "", contaDestino: draft.fonte || FONTES[1],
+          status, obs: ""
+        });
+      }
+      reset();
+    } finally {
+      setSaving(false);
     }
-    reset();
   };
 
   return (
@@ -556,8 +596,8 @@ function QuickAddFab({ onAddCusto, onAddReceita }) {
             <Field label="Status">
               <SelectInput options={draft.tipo === "custo" ? STATUS_CUSTO : STATUS_RECEITA} value={draft.status || "Pendente"} onChange={e => setDraft({ ...draft, status: e.target.value })} />
             </Field>
-            <button type="button" onClick={salvar} style={{ ...addBtnStyle, gridColumn: "span 2", justifyContent: "center", marginTop: 4 }}>
-              <Check size={16} /> Salvar
+            <button type="button" onClick={salvar} disabled={saving} style={{ ...addBtnStyle, gridColumn: "span 2", justifyContent: "center", marginTop: 4, opacity: saving ? 0.7 : 1, cursor: saving ? "default" : "pointer" }}>
+              <Check size={16} /> {saving ? "Salvando..." : "Salvar"}
             </button>
           </div>
         </Modal>
@@ -1418,6 +1458,7 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
   const [fonteFiltro, setFonteFiltro] = useState("Todas");
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
+  const [saving, setSaving] = useState(false);
 
   const filtrados = useMemo(() => {
     const list = custos.filter(c => c.mes === mesFiltro && (fonteFiltro === "Todas" || c.fonte === fonteFiltro));
@@ -1464,14 +1505,27 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
     onConsumeJump();
   }, [jumpTarget]);
 
-  const submit = (e) => {
+  const submit = async (e) => {
     e.preventDefault();
+    if (saving) return;
     if (!form.descricao || !form.vencimento || form.valorPrevisto === "") return;
-    const payload = { ...form, valorPrevisto: parseValorBR(form.valorPrevisto), valorPago: form.valorPago === "" ? null : parseValorBR(form.valorPago) };
-    if (editingId) { onUpdate(editingId, payload); } else { onAdd(payload); }
-    setForm(blankCusto(mesFiltro));
-    setEditingId(null);
-    setShowForm(false);
+    const valorPrevistoNum = parseValorBR(form.valorPrevisto);
+    const valorPagoNum = form.valorPago === "" ? null : parseValorBR(form.valorPago);
+    if (!isValorValido(valorPrevistoNum) || (valorPagoNum !== null && !isValorValido(valorPagoNum))) {
+      alert("O valor precisa ser maior que zero.");
+      return;
+    }
+    if (!confirmDateSanity(form.vencimento, "data de vencimento")) return;
+    const payload = { ...form, valorPrevisto: valorPrevistoNum, valorPago: valorPagoNum };
+    setSaving(true);
+    try {
+      if (editingId) { await onUpdate(editingId, payload); } else { await onAdd(payload); }
+      setForm(blankCusto(mesFiltro));
+      setEditingId(null);
+      setShowForm(false);
+    } finally {
+      setSaving(false);
+    }
   };
 
   const grupos = useMemo(() => {
@@ -1601,8 +1655,8 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
             <Field label="Fonte de Pagamento"><SelectInput options={FONTES} value={form.fonte} onChange={e=>setForm({...form,fonte:e.target.value})} /></Field>
             <Field label="Status"><SelectInput options={STATUS_CUSTO} value={form.status} onChange={e=>setForm({...form,status:e.target.value})} /></Field>
             <Field label="Observações"><TextArea rows={3} style={{gridColumn:"span 2"}} value={form.obs} onChange={e=>setForm({...form,obs:e.target.value})} /></Field>
-            <button type="submit" style={{ ...addBtnStyle, gridColumn: "span 2", justifyContent: "center", marginTop: 4 }}>
-              <Check size={16}/> {editingId ? "Salvar alterações" : "Salvar custo"}
+            <button type="submit" disabled={saving} style={{ ...addBtnStyle, gridColumn: "span 2", justifyContent: "center", marginTop: 4, opacity: saving ? 0.7 : 1, cursor: saving ? "default" : "pointer" }}>
+              <Check size={16}/> {saving ? "Salvando..." : (editingId ? "Salvar alterações" : "Salvar custo")}
             </button>
           </form>
         </Modal>
@@ -1619,6 +1673,7 @@ function ReceitasTab({ receitas, onAdd, onRemove, onUpdate }) {
   const [mesFiltro, setMesFiltro] = useState(currentMonth());
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
+  const [saving, setSaving] = useState(false);
 
   const filtradas = useMemo(() => {
     const list = receitas.filter(r => r.mes === mesFiltro);
@@ -1655,14 +1710,27 @@ function ReceitasTab({ receitas, onAdd, onRemove, onUpdate }) {
     setShowForm(true);
   };
 
-  const submit = (e) => {
+  const submit = async (e) => {
     e.preventDefault();
+    if (saving) return;
     if (!form.descricao || !form.dataRecebimento || form.valorPrevisto === "") return;
-    const payload = { ...form, valorPrevisto: parseValorBR(form.valorPrevisto), valorRecebido: form.valorRecebido === "" ? null : parseValorBR(form.valorRecebido) };
-    if (editingId) { onUpdate(editingId, payload); } else { onAdd(payload); }
-    setForm(blankReceita(mesFiltro));
-    setEditingId(null);
-    setShowForm(false);
+    const valorPrevistoNum = parseValorBR(form.valorPrevisto);
+    const valorRecebidoNum = form.valorRecebido === "" ? null : parseValorBR(form.valorRecebido);
+    if (!isValorValido(valorPrevistoNum) || (valorRecebidoNum !== null && !isValorValido(valorRecebidoNum))) {
+      alert("O valor precisa ser maior que zero.");
+      return;
+    }
+    if (!confirmDateSanity(form.dataRecebimento, "data de recebimento")) return;
+    const payload = { ...form, valorPrevisto: valorPrevistoNum, valorRecebido: valorRecebidoNum };
+    setSaving(true);
+    try {
+      if (editingId) { await onUpdate(editingId, payload); } else { await onAdd(payload); }
+      setForm(blankReceita(mesFiltro));
+      setEditingId(null);
+      setShowForm(false);
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -1721,8 +1789,8 @@ function ReceitasTab({ receitas, onAdd, onRemove, onUpdate }) {
             <Field label="Conta de Destino"><SelectInput options={FONTES} value={form.contaDestino} onChange={e=>setForm({...form,contaDestino:e.target.value})} /></Field>
             <Field label="Status"><SelectInput options={STATUS_RECEITA} value={form.status} onChange={e=>setForm({...form,status:e.target.value})} /></Field>
             <Field label="Observações"><TextArea rows={3} style={{gridColumn:"span 2"}} value={form.obs} onChange={e=>setForm({...form,obs:e.target.value})} /></Field>
-            <button type="submit" style={{ ...addBtnStyle, gridColumn: "span 2", justifyContent: "center", marginTop: 4 }}>
-              <Check size={16}/> {editingId ? "Salvar alterações" : "Salvar receita"}
+            <button type="submit" disabled={saving} style={{ ...addBtnStyle, gridColumn: "span 2", justifyContent: "center", marginTop: 4, opacity: saving ? 0.7 : 1, cursor: saving ? "default" : "pointer" }}>
+              <Check size={16}/> {saving ? "Salvando..." : (editingId ? "Salvar alterações" : "Salvar receita")}
             </button>
           </form>
         </Modal>
@@ -1938,6 +2006,7 @@ function MonthDetailModal({ resumo, custos, receitas, onClose }) {
 function DemandasTab({ demandas, onAdd, onRemove, onUpdate, onStatusChange, jumpTarget, onConsumeJump }) {
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
+  const [saving, setSaving] = useState(false);
 
   const resumo = useMemo(() => ({
     pendente: demandas.filter(d=>d.status==="Pendente").length,
@@ -1965,13 +2034,19 @@ function DemandasTab({ demandas, onAdd, onRemove, onUpdate, onStatusChange, jump
     onConsumeJump();
   }, [jumpTarget]);
 
-  const submit = (e) => {
+  const submit = async (e) => {
     e.preventDefault();
+    if (saving) return;
     if (!form.nome) return;
-    if (editingId) { onUpdate(editingId, form); } else { onAdd({ ...form, criadoEm: todayISO() }); }
-    setForm(blank());
-    setEditingId(null);
-    setShowForm(false);
+    setSaving(true);
+    try {
+      if (editingId) { await onUpdate(editingId, form); } else { await onAdd({ ...form, criadoEm: todayISO() }); }
+      setForm(blank());
+      setEditingId(null);
+      setShowForm(false);
+    } finally {
+      setSaving(false);
+    }
   };
 
   const PRIORIDADE_COLOR = { "Alta": C.coral, "Média": C.amber, "Baixa": C.emeraldDeep };
@@ -2081,8 +2156,8 @@ function DemandasTab({ demandas, onAdd, onRemove, onUpdate, onStatusChange, jump
             <Field label="Status"><SelectInput options={STATUS_DEMANDA} value={form.status} onChange={e=>setForm({...form,status:e.target.value})} /></Field>
             <Field label="Detalhes"><TextInput style={{gridColumn:"span 2"}} value={form.detalhes} onChange={e=>setForm({...form,detalhes:e.target.value})} /></Field>
             <Field label="Observações"><TextArea rows={3} style={{gridColumn:"span 2"}} value={form.obs} onChange={e=>setForm({...form,obs:e.target.value})} /></Field>
-            <button type="submit" style={{ ...addBtnStyle, gridColumn: "span 2", justifyContent: "center", marginTop: 4 }}>
-              <Check size={16}/> {editingId ? "Salvar alterações" : "Salvar demanda"}
+            <button type="submit" disabled={saving} style={{ ...addBtnStyle, gridColumn: "span 2", justifyContent: "center", marginTop: 4, opacity: saving ? 0.7 : 1, cursor: saving ? "default" : "pointer" }}>
+              <Check size={16}/> {saving ? "Salvando..." : (editingId ? "Salvar alterações" : "Salvar demanda")}
             </button>
           </form>
         </Modal>
