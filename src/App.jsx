@@ -360,8 +360,8 @@ function Field({ label, children }) {
 }
 
 const inputStyle = {
-  border: "1px solid " + C.border, borderRadius: 10, padding: "10px 12px",
-  fontSize: 14, fontFamily: "'Inter', sans-serif", background: C.card,
+  border: "1px solid " + C.border, borderRadius: 11, padding: "12px 13px",
+  fontSize: 14.5, fontFamily: "'Inter', sans-serif", background: C.card,
   color: C.ink, outline: "none",
 };
 
@@ -385,7 +385,7 @@ function SelectInput({ options, ...props }) {
   );
 }
 
-function Modal({ title, onClose, children }) {
+function Modal({ title, onClose, children, footer }) {
   return (
     <div style={{
       position: "fixed", inset: 0, background: "#151A2E99", zIndex: 50,
@@ -395,20 +395,33 @@ function Modal({ title, onClose, children }) {
       <div
         onClick={e => e.stopPropagation()}
         style={{
-          background: C.card, width: "100%", maxWidth: "min(94vw, 860px)", maxHeight: "84vh",
-          borderRadius: 24, padding: "28px 28px 32px", overflowY: "auto",
+          background: C.card, width: "100%", maxWidth: "min(96vw, 1040px)", maxHeight: "90vh",
+          borderRadius: 24, overflow: "hidden", display: "flex", flexDirection: "column",
           boxShadow: "0 -8px 30px #0004", animation: "slideUp .25s ease-out"
         }}
       >
-        <div style={{ width: 36, height: 4, borderRadius: 4, background: C.border, margin: "0 auto 16px" }} />
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
-          <h3 style={{ margin: 0, fontFamily: "'Fraunces', serif", fontSize: 21, color: C.ink }}>{title}</h3>
-          <button onClick={onClose} style={{
-            border: "none", background: C.border, borderRadius: "50%", width: 32, height: 32,
-            display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: C.ink
-          }}><X size={16} /></button>
+        <div style={{ padding: "28px 28px 0", flexShrink: 0 }}>
+          <div style={{ width: 36, height: 4, borderRadius: 4, background: C.border, margin: "0 auto 16px" }} />
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
+            <h3 style={{ margin: 0, fontFamily: "'Fraunces', serif", fontSize: 21, color: C.ink }}>{title}</h3>
+            <button onClick={onClose} style={{
+              border: "none", background: C.border, borderRadius: "50%", width: 32, height: 32,
+              display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: C.ink
+            }}><X size={16} /></button>
+          </div>
         </div>
-        {children}
+        <div style={{ padding: "0 28px", overflowY: "auto", flex: 1 }}>
+          {children}
+        </div>
+        {footer && (
+          <div style={{
+            flexShrink: 0, padding: "16px 28px calc(16px + env(safe-area-inset-bottom))",
+            borderTop: `1px solid ${C.border}`, boxShadow: "0 -6px 16px rgba(0,0,0,0.25)"
+          }}>
+            {footer}
+          </div>
+        )}
+        {!footer && <div style={{ height: 28, flexShrink: 0 }} />}
       </div>
     </div>
   );
@@ -1645,8 +1658,16 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
       )}
 
       {showForm && (
-        <Modal title={editingId ? "Editar custo" : "Novo custo"} onClose={() => { setShowForm(false); setEditingId(null); }}>
-          <form onSubmit={submit} style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+        <Modal
+          title={editingId ? "Editar custo" : "Novo custo"}
+          onClose={() => { setShowForm(false); setEditingId(null); }}
+          footer={
+            <button type="submit" form="custo-form" disabled={saving} style={{ ...addBtnStyle, width: "100%", justifyContent: "center", opacity: saving ? 0.7 : 1, cursor: saving ? "default" : "pointer" }}>
+              <Check size={16}/> {saving ? "Salvando..." : (editingId ? "Salvar alterações" : "Salvar custo")}
+            </button>
+          }
+        >
+          <form id="custo-form" onSubmit={submit} style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, padding: "4px 0 24px" }}>
             <Field label="Descrição / Categoria"><TextInput style={{gridColumn:"span 2"}} required value={form.descricao} onChange={e=>setForm({...form,descricao:e.target.value})} /></Field>
             <Field label="Vencimento"><TextInput type="date" required value={form.vencimento} onChange={e=>setForm({...form,vencimento:e.target.value})} /></Field>
             <Field label="Data Pagamento"><TextInput type="date" value={form.dataPagamento} onChange={e=>setForm({...form,dataPagamento:e.target.value})} /></Field>
@@ -1654,10 +1675,7 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
             <Field label="Valor Pago (R$)"><TextInput type="text" inputMode="decimal" placeholder="0,00" value={form.valorPago} onChange={e=>setForm({...form,valorPago:e.target.value})} /></Field>
             <Field label="Fonte de Pagamento"><SelectInput options={FONTES} value={form.fonte} onChange={e=>setForm({...form,fonte:e.target.value})} /></Field>
             <Field label="Status"><SelectInput options={STATUS_CUSTO} value={form.status} onChange={e=>setForm({...form,status:e.target.value})} /></Field>
-            <Field label="Observações"><TextArea rows={3} style={{gridColumn:"span 2"}} value={form.obs} onChange={e=>setForm({...form,obs:e.target.value})} /></Field>
-            <button type="submit" disabled={saving} style={{ ...addBtnStyle, gridColumn: "span 2", justifyContent: "center", marginTop: 4, opacity: saving ? 0.7 : 1, cursor: saving ? "default" : "pointer" }}>
-              <Check size={16}/> {saving ? "Salvando..." : (editingId ? "Salvar alterações" : "Salvar custo")}
-            </button>
+            <Field label="Observações"><TextArea rows={10} style={{gridColumn:"span 2", height: 260}} value={form.obs} onChange={e=>setForm({...form,obs:e.target.value})} /></Field>
           </form>
         </Modal>
       )}
@@ -1779,8 +1797,16 @@ function ReceitasTab({ receitas, onAdd, onRemove, onUpdate }) {
       />
 
       {showForm && (
-        <Modal title={editingId ? "Editar receita" : "Nova receita"} onClose={() => { setShowForm(false); setEditingId(null); }}>
-          <form onSubmit={submit} style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+        <Modal
+          title={editingId ? "Editar receita" : "Nova receita"}
+          onClose={() => { setShowForm(false); setEditingId(null); }}
+          footer={
+            <button type="submit" form="receita-form" disabled={saving} style={{ ...addBtnStyle, width: "100%", justifyContent: "center", opacity: saving ? 0.7 : 1, cursor: saving ? "default" : "pointer" }}>
+              <Check size={16}/> {saving ? "Salvando..." : (editingId ? "Salvar alterações" : "Salvar receita")}
+            </button>
+          }
+        >
+          <form id="receita-form" onSubmit={submit} style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, padding: "4px 0 24px" }}>
             <Field label="Descrição / Origem"><TextInput style={{gridColumn:"span 2"}} required value={form.descricao} onChange={e=>setForm({...form,descricao:e.target.value})} /></Field>
             <Field label="Data Recebimento"><TextInput type="date" required value={form.dataRecebimento} onChange={e=>setForm({...form,dataRecebimento:e.target.value})} /></Field>
             <Field label="Categoria"><TextInput value={form.categoria} onChange={e=>setForm({...form,categoria:e.target.value})} /></Field>
@@ -1788,10 +1814,7 @@ function ReceitasTab({ receitas, onAdd, onRemove, onUpdate }) {
             <Field label="Valor Recebido (R$)"><TextInput type="text" inputMode="decimal" placeholder="0,00" value={form.valorRecebido} onChange={e=>setForm({...form,valorRecebido:e.target.value})} /></Field>
             <Field label="Conta de Destino"><SelectInput options={FONTES} value={form.contaDestino} onChange={e=>setForm({...form,contaDestino:e.target.value})} /></Field>
             <Field label="Status"><SelectInput options={STATUS_RECEITA} value={form.status} onChange={e=>setForm({...form,status:e.target.value})} /></Field>
-            <Field label="Observações"><TextArea rows={3} style={{gridColumn:"span 2"}} value={form.obs} onChange={e=>setForm({...form,obs:e.target.value})} /></Field>
-            <button type="submit" disabled={saving} style={{ ...addBtnStyle, gridColumn: "span 2", justifyContent: "center", marginTop: 4, opacity: saving ? 0.7 : 1, cursor: saving ? "default" : "pointer" }}>
-              <Check size={16}/> {saving ? "Salvando..." : (editingId ? "Salvar alterações" : "Salvar receita")}
-            </button>
+            <Field label="Observações"><TextArea rows={10} style={{gridColumn:"span 2", height: 260}} value={form.obs} onChange={e=>setForm({...form,obs:e.target.value})} /></Field>
           </form>
         </Modal>
       )}
@@ -2147,18 +2170,23 @@ function DemandasTab({ demandas, onAdd, onRemove, onUpdate, onStatusChange, jump
       </div>
 
       {showForm && (
-        <Modal title={editingId ? "Editar demanda" : "Nova demanda"} onClose={() => { setShowForm(false); setEditingId(null); }}>
-          <form onSubmit={submit} style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+        <Modal
+          title={editingId ? "Editar demanda" : "Nova demanda"}
+          onClose={() => { setShowForm(false); setEditingId(null); }}
+          footer={
+            <button type="submit" form="demanda-form" disabled={saving} style={{ ...addBtnStyle, width: "100%", justifyContent: "center", opacity: saving ? 0.7 : 1, cursor: saving ? "default" : "pointer" }}>
+              <Check size={16}/> {saving ? "Salvando..." : (editingId ? "Salvar alterações" : "Salvar demanda")}
+            </button>
+          }
+        >
+          <form id="demanda-form" onSubmit={submit} style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, padding: "4px 0 24px" }}>
             <Field label="Nome da Demanda"><TextInput style={{gridColumn:"span 2"}} required value={form.nome} onChange={e=>setForm({...form,nome:e.target.value})} /></Field>
             <Field label="Contato"><TextInput value={form.contato} onChange={e=>setForm({...form,contato:e.target.value})} /></Field>
             <Field label="Prazo"><TextInput type="date" value={form.prazo} onChange={e=>setForm({...form,prazo:e.target.value})} /></Field>
             <Field label="Prioridade"><SelectInput options={PRIORIDADES} value={form.prioridade} onChange={e=>setForm({...form,prioridade:e.target.value})} /></Field>
             <Field label="Status"><SelectInput options={STATUS_DEMANDA} value={form.status} onChange={e=>setForm({...form,status:e.target.value})} /></Field>
             <Field label="Detalhes"><TextInput style={{gridColumn:"span 2"}} value={form.detalhes} onChange={e=>setForm({...form,detalhes:e.target.value})} /></Field>
-            <Field label="Observações"><TextArea rows={3} style={{gridColumn:"span 2"}} value={form.obs} onChange={e=>setForm({...form,obs:e.target.value})} /></Field>
-            <button type="submit" disabled={saving} style={{ ...addBtnStyle, gridColumn: "span 2", justifyContent: "center", marginTop: 4, opacity: saving ? 0.7 : 1, cursor: saving ? "default" : "pointer" }}>
-              <Check size={16}/> {saving ? "Salvando..." : (editingId ? "Salvar alterações" : "Salvar demanda")}
-            </button>
+            <Field label="Observações"><TextArea rows={10} style={{gridColumn:"span 2", height: 260}} value={form.obs} onChange={e=>setForm({...form,obs:e.target.value})} /></Field>
           </form>
         </Modal>
       )}
