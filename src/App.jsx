@@ -138,6 +138,20 @@ const shiftMonth = (mes, delta) => {
   const d = new Date(y, (m - 1) + delta, 1);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 };
+const daysInMonthOf = (mes) => {
+  const [y, m] = mes.split("-").map(Number);
+  return new Date(y, m, 0).getDate();
+};
+// Sum of valorPago/valorRecebido up to a given day-of-month — used to compare
+// "this month so far" against "last month, same point in the month" instead of
+// against a full previous month (which always makes the current partial month
+// look artificially better early on, and worse near the end).
+const pagoAteDia = (custos, mes, dia) => custos
+  .filter(c => c.mes === mes && c.dataPagamento && Number(c.dataPagamento.split("-")[2]) <= dia)
+  .reduce((s, c) => s + Number(c.valorPago || 0), 0);
+const recebidoAteDia = (receitas, mes, dia) => receitas
+  .filter(r => r.mes === mes && r.dataRecebimento && Number(r.dataRecebimento.split("-")[2]) <= dia)
+  .reduce((s, r) => s + Number(r.valorRecebido || 0), 0);
 
 /* ------------------------------------------------------------------ */
 /*  Validação de dados                                                 */
@@ -337,15 +351,37 @@ function Avatar({ label, color, icon }) {
   );
 }
 
-function ProgressBar({ pct, color = C.emerald, trackColor = C.border, height = 8 }) {
+function ProgressBar({ pct, color = C.emerald, trackColor = C.border, height = 8, overColor = C.coral }) {
   const clamped = Math.max(0, Math.min(100, pct));
   const over = pct > 100;
   return (
     <div style={{ width: "100%", height, borderRadius: height, background: trackColor, overflow: "hidden" }}>
       <div style={{
         width: `${clamped}%`, height: "100%", borderRadius: height,
-        background: over ? C.coral : color, transition: "width .3s ease"
+        background: over ? overColor : color, transition: "width .3s ease"
       }} />
+    </div>
+  );
+}
+
+// Compact chart/list tooltip that shows each series' value, its color dot,
+// and its share of the total — a bit more context than a bare number.
+function RichTooltip({ active, payload, label, total, colorMap }) {
+  if (!active || !payload || !payload.length) return null;
+  const sum = total ?? payload.reduce((s, p) => s + (Number(p.value) || 0), 0);
+  return (
+    <div style={{ background: C.card, boxShadow: shadowMd, borderRadius: 10, padding: "10px 12px", fontSize: 12.5, minWidth: 150 }}>
+      {label != null && label !== "" && (
+        <div style={{ color: C.muted, fontWeight: 700, marginBottom: 6, fontSize: 11.5, textTransform: "uppercase", letterSpacing: 0.3 }}>{label}</div>
+      )}
+      {payload.map((p, i) => (
+        <div key={i} style={{ display: "flex", alignItems: "center", gap: 7, marginTop: i > 0 ? 5 : 0 }}>
+          <span style={{ width: 8, height: 8, borderRadius: 3, background: (colorMap && colorMap[p.dataKey]) || p.color || p.fill, flexShrink: 0 }} />
+          <span style={{ color: C.ink, flex: 1, whiteSpace: "nowrap" }}>{p.name}</span>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: C.ink, fontWeight: 700 }}>{fmtBRL(Number(p.value) || 0)}</span>
+          {sum > 0 && <span style={{ color: C.faint, fontSize: 10.5, minWidth: 30, textAlign: "right" }}>{((Number(p.value) / sum) * 100).toFixed(0)}%</span>}
+        </div>
+      ))}
     </div>
   );
 }
@@ -472,6 +508,15 @@ function StatRow({ stats }) {
             color: colors[s.tone || "ink"], fontVariantNumeric: "tabular-nums", letterSpacing: -0.3,
             whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis"
           }}>{s.value}</div>
+          {s.trend && (
+            <div style={{
+              display: "flex", alignItems: "center", gap: 3, marginTop: 4, fontSize: 10.5, fontWeight: 700,
+              color: s.trend.good ? C.emerald : C.coral
+            }}>
+              {s.trend.pct >= 0 ? <TrendingUp size={10} /> : <TrendingDown size={10} />}
+              {Math.abs(s.trend.pct).toFixed(0)}% vs mês ant.
+            </div>
+          )}
         </div>
       ))}
     </div>
@@ -968,8 +1013,15 @@ const menuItemStyle = {
 
 const MESES_ABR = MESES.map(m => m.slice(0, 3));
 
-function BalanceHero({ saldo, mesLabel, hidden, onToggle, saldosPorMes }) {
+function BalanceHero({ saldo, trendAtual, trendAnterior, mesLabel, hidden, onToggle, saldosPorMes, porFonte, expanded, onToggleExpanded }) {
   const maxAbs = Math.max(1, ...saldosPorMes.map(s => Math.abs(s)));
+  // Trend compares "recebido - pago até o mesmo dia do mês" on both sides (not
+  // the full previous month — see the trend calc in DashboardTab for why) and,
+  // within that, % only makes intuitive sense against a positive base: "466%"
+  // over a negative previous saldo reads as nonsense, so that case falls back
+  // to a plain R$ difference instead.
+  const saldoDiff = trendAnterior !== null ? trendAtual - trendAnterior : null;
+  const trendPct = (trendAnterior !== null && trendAnterior > 0) ? (saldoDiff / trendAnterior) * 100 : null;
   return (
     <div className="in" style={{
       background: `linear-gradient(150deg, #0B0F1F 0%, #101632 55%, #0F3D33 100%)`,
@@ -982,8 +1034,21 @@ function BalanceHero({ saldo, mesLabel, hidden, onToggle, saldosPorMes }) {
         background: `radial-gradient(circle, ${C.emeraldGlow} 0%, transparent 70%)`
       }} />
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", position: "relative" }}>
-        <div>
-          <div style={{ fontSize: 12.5, color: C.lavender, fontWeight: 700, marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.6 }}>Saldo de {mesLabel}</div>
+        <div className="tap" onClick={onToggleExpanded} style={{ cursor: "pointer", flex: 1, minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 12.5, color: C.lavender, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.6 }}>Saldo de {mesLabel}</span>
+            {trendPct !== null ? (
+              <span style={{ display: "flex", alignItems: "center", gap: 2, fontSize: 10.5, fontWeight: 700, color: trendPct >= 0 ? "#4FE8BE" : "#FF8A76" }}>
+                {trendPct >= 0 ? <TrendingUp size={11} /> : <TrendingDown size={11} />}
+                {Math.abs(trendPct).toFixed(0)}% vs mês ant.
+              </span>
+            ) : saldoDiff !== null && (
+              <span style={{ display: "flex", alignItems: "center", gap: 2, fontSize: 10.5, fontWeight: 700, color: saldoDiff >= 0 ? "#4FE8BE" : "#FF8A76" }}>
+                {saldoDiff >= 0 ? <TrendingUp size={11} /> : <TrendingDown size={11} />}
+                {hidden ? "•••" : fmtBRL(Math.abs(saldoDiff))} vs mês ant.
+              </span>
+            )}
+          </div>
           <div style={{
             fontFamily: "'Fraunces', serif", fontWeight: 700, fontSize: 48, letterSpacing: -1.2,
             color: saldo < 0 ? "#FF8A76" : "#4FE8BE", fontVariantNumeric: "tabular-nums", lineHeight: 1.02
@@ -991,12 +1056,21 @@ function BalanceHero({ saldo, mesLabel, hidden, onToggle, saldosPorMes }) {
             {hidden ? "R$ •••••" : fmtBRL(saldo)}
           </div>
         </div>
-        <button className="tap" onClick={onToggle} style={{
-          width: 38, height: 38, borderRadius: 12, border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.06)",
-          color: C.lavender, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0
-        }}>
-          {hidden ? <EyeOff size={16} /> : <Eye size={16} />}
-        </button>
+        <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
+          <button className="tap" onClick={onToggleExpanded} aria-label="Ver saldo por fonte" style={{
+            width: 38, height: 38, borderRadius: 12, border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.06)",
+            color: C.lavender, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
+            transform: expanded ? "rotate(45deg)" : "none", transition: "transform .2s ease"
+          }}>
+            <Plus size={16} />
+          </button>
+          <button className="tap" onClick={onToggle} style={{
+            width: 38, height: 38, borderRadius: 12, border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.06)",
+            color: C.lavender, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center"
+          }}>
+            {hidden ? <EyeOff size={16} /> : <Eye size={16} />}
+          </button>
+        </div>
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 5, height: 56, marginTop: 26, position: "relative" }}>
         {saldosPorMes.map((s, i) => {
@@ -1015,6 +1089,48 @@ function BalanceHero({ saldo, mesLabel, hidden, onToggle, saldosPorMes }) {
           );
         })}
       </div>
+
+      {expanded && (
+        <div className="in" style={{ marginTop: 22, paddingTop: 18, borderTop: "1px solid rgba(255,255,255,0.1)", position: "relative" }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: C.lavender, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 12 }}>
+            Movimento do mês, por fonte
+          </div>
+          {porFonte.length === 0 ? (
+            <div style={{ fontSize: 12.5, color: "#7C86AD" }}>Nenhuma fonte com movimento neste mês ainda.</div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              {porFonte.map(f => (
+                <div key={f.fonte}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0" }}>
+                    <span style={{ width: 9, height: 9, borderRadius: 3, background: fonteColor(f.fonte), flexShrink: 0 }} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: "#F3F5FA" }}>{f.fonte}</div>
+                      <div style={{ fontSize: 10.5, color: "#7C86AD", marginTop: 1 }}>
+                        Recebido {hidden ? "•••" : fmtBRL(f.recebido)} · {f.pendente > 0 ? "a pagar" : "pago"} {hidden ? "•••" : fmtBRL(f.pendente > 0 ? f.pendente : f.pago)}
+                      </div>
+                    </div>
+                    <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 700, fontSize: 13.5, color: f.saldo >= 0 ? "#4FE8BE" : "#FF8A76", flexShrink: 0 }}>
+                      {hidden ? "•••" : `${f.saldo >= 0 ? "+" : "−"}${fmtBRL(Math.abs(f.saldo))}`}
+                    </div>
+                  </div>
+                  {f.vaiNegativar && (
+                    <div style={{
+                      background: "#2A151C", border: "1px solid #4A2430", borderRadius: 12, padding: "9px 11px",
+                      display: "flex", alignItems: "flex-start", gap: 7, fontSize: 11.5, color: "#FFB4BE", marginBottom: 4
+                    }}>
+                      <AlertCircle size={13} style={{ flexShrink: 0, marginTop: 1 }} />
+                      <span>
+                        {f.fonte} fica negativa com {f.itensPendentes.length > 1 ? `os ${f.itensPendentes.length} custos pendentes` : "o custo pendente"} desta fonte
+                        {" "}({f.itensPendentes.slice(0, 2).map(it => it.descricao).join(", ")}{f.itensPendentes.length > 2 ? "…" : ""}) — considere transferir de outra fonte antes do vencimento.
+                      </span>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -1096,12 +1212,59 @@ function ProjBar({ label, done, pending, color, max, hidden }) {
   );
 }
 
+// "Ritmo do mês": compares what's been paid so far this month against what was
+// typically already paid by this same day of the month, averaged over the last
+// few months of REAL per-day payment history (dataPagamento), not a uniform/
+// linear daily distribution — months front-load several fixed costs (Pólo,
+// Pensão, Unimed...), so a naive average would trigger false alarms early on.
+// Degrades gracefully to "indisponível" when there's no paid history yet.
+function useRitmoMes(custos, mesAtual, nMeses = 3) {
+  return useMemo(() => {
+    const [anoAtual, mesNumAtual] = mesAtual.split("-").map(Number);
+    const hoje = new Date();
+    const ehMesCorrente = hoje.getFullYear() === anoAtual && (hoje.getMonth() + 1) === mesNumAtual;
+    const diaRef = ehMesCorrente ? hoje.getDate() : new Date(anoAtual, mesNumAtual, 0).getDate();
+
+    const historico = [];
+    for (let i = 1; i <= nMeses; i++) {
+      const d = new Date(anoAtual, mesNumAtual - 1 - i, 1);
+      const mk = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+      const pagosDoMes = custos.filter(c => c.mes === mk && c.status === "Pago" && c.dataPagamento);
+      if (pagosDoMes.length === 0) continue;
+      const ateODia = pagosDoMes
+        .filter(c => Number(c.dataPagamento.split("-")[2]) <= diaRef)
+        .reduce((s, c) => s + Number(c.valorPago || 0), 0);
+      const totalMes = pagosDoMes.reduce((s, c) => s + Number(c.valorPago || 0), 0);
+      historico.push({ mk, ateODia, totalMes });
+    }
+
+    if (historico.length === 0) return { disponivel: false, diaRef };
+
+    const mediaAteODia = historico.reduce((s, m) => s + m.ateODia, 0) / historico.length;
+    // If nothing was ever paid this early in the month across the historical
+    // months, there's no usable reference point yet — showing a fabricated
+    // "999%" would be as misleading as the metric this replaced.
+    if (mediaAteODia <= 0) return { disponivel: false, diaRef };
+
+    const mediaMensal = historico.reduce((s, m) => s + m.totalMes, 0) / historico.length;
+    const pagoAteAgora = custos
+      .filter(c => c.mes === mesAtual && c.status === "Pago" && c.dataPagamento && Number(c.dataPagamento.split("-")[2]) <= diaRef)
+      .reduce((s, c) => s + Number(c.valorPago || 0), 0);
+    const pct = (pagoAteAgora / mediaAteODia) * 100;
+
+    return { disponivel: true, diaRef, mediaAteODia, mediaMensal, pagoAteAgora, pct, nMeses: historico.length };
+  }, [custos, mesAtual, nMeses]);
+}
+
 function DashboardTab({ custos, receitas, demandas, onNavigate }) {
   const [hidden, setHidden] = useState(false);
+  const [saldoAberto, setSaldoAberto] = useState(false);
   const ano = new Date().getFullYear();
   const mesAtual = currentMonth();
+  const mesAnterior = shiftMonth(mesAtual, -1);
   const atencao = useAtencao(custos, demandas);
   const proximos30 = useAtencao(custos, demandas, 30);
+  const ritmo = useRitmoMes(custos, mesAtual);
 
   const receitasComparativo = useMemo(() => {
     return receitas.filter(r => r.mes === mesAtual)
@@ -1124,6 +1287,54 @@ function DashboardTab({ custos, receitas, demandas, onNavigate }) {
     const totalPago = cs.reduce((s, c) => s + Number(c.valorPago || 0), 0);
     const totalRecebido = rs.reduce((s, r) => s + Number(r.valorRecebido || 0), 0);
     return { totalPrevisto, totalPago, totalRecebido, saldo: totalRecebido - totalPago, pctUsado: totalPrevisto > 0 ? (totalPago / totalPrevisto) * 100 : 0 };
+  }, [custos, receitas, mesAtual]);
+
+  // Trend comparisons use "até o mesmo dia do mês" on both sides — comparing
+  // this month's running total (partial, since the month isn't over) against
+  // a FULL previous month always makes the current month look artificially
+  // better early on and worse near the end. Same fix as Ritmo do mês, applied
+  // to the Pago/Recebido/Saldo trend indicators.
+  const diaCorte = ritmo.diaRef;
+  const diaCorteAnterior = Math.min(diaCorte, daysInMonthOf(mesAnterior));
+  const pagoAteDiaAtual = useMemo(() => pagoAteDia(custos, mesAtual, diaCorte), [custos, mesAtual, diaCorte]);
+  const pagoAteDiaAnterior = useMemo(() => pagoAteDia(custos, mesAnterior, diaCorteAnterior), [custos, mesAnterior, diaCorteAnterior]);
+  const recebidoAteDiaAtual = useMemo(() => recebidoAteDia(receitas, mesAtual, diaCorte), [receitas, mesAtual, diaCorte]);
+  const recebidoAteDiaAnterior = useMemo(() => recebidoAteDia(receitas, mesAnterior, diaCorteAnterior), [receitas, mesAnterior, diaCorteAnterior]);
+  const pctChange = (atual, anterior) => (anterior > 0 ? ((atual - anterior) / anterior) * 100 : null);
+  const pagoTrendPct = pctChange(pagoAteDiaAtual, pagoAteDiaAnterior);
+  const recebidoTrendPct = pctChange(recebidoAteDiaAtual, recebidoAteDiaAnterior);
+  const saldoAteDiaAtual = recebidoAteDiaAtual - pagoAteDiaAtual;
+  const saldoAteDiaAnterior = recebidoAteDiaAnterior - pagoAteDiaAnterior;
+
+  // Saldo por fonte: current month's net movement per payment source (custos'
+  // "fonte" field, receitas' "contaDestino" field), only fontes that actually
+  // had movement this month. The warning sums ALL pending custos tied to a
+  // fonte (not just the next one), so a fonte with several upcoming bills
+  // doesn't under-warn.
+  const saldoPorFonte = useMemo(() => {
+    const map = {};
+    const get = (f) => (map[f] || (map[f] = { recebido: 0, pago: 0, pendente: 0, itensPendentes: [] }));
+    custos.filter(c => c.mes === mesAtual).forEach(c => {
+      const f = get(c.fonte || "—");
+      if (c.status === "Pago") {
+        f.pago += Number(c.valorPago || 0);
+      } else {
+        const v = Number(c.valorPrevisto || 0);
+        f.pendente += v;
+        f.itensPendentes.push({ descricao: c.descricao, valor: v, vencimento: c.vencimento });
+      }
+    });
+    receitas.filter(r => r.mes === mesAtual).forEach(r => {
+      get(r.contaDestino || "—").recebido += Number(r.valorRecebido || 0);
+    });
+    return Object.entries(map)
+      .map(([fonte, v]) => {
+        const saldo = v.recebido - v.pago;
+        const saldoProjetado = saldo - v.pendente;
+        return { fonte, ...v, saldo, saldoProjetado, vaiNegativar: v.pendente > 0 && saldoProjetado < 0 };
+      })
+      .filter(f => f.recebido > 0 || f.pago > 0 || f.pendente > 0)
+      .sort((a, b) => (a.vaiNegativar !== b.vaiNegativar ? (a.vaiNegativar ? -1 : 1) : b.saldo - a.saldo));
   }, [custos, receitas, mesAtual]);
 
   const porFonte = useMemo(() => {
@@ -1170,8 +1381,6 @@ function DashboardTab({ custos, receitas, demandas, onNavigate }) {
   }, [custos, mesAtual]);
   const topMax = Math.max(1, ...topCustos.map(c => Number(c.valorPago ?? c.valorPrevisto ?? 0)));
 
-  const mesAnterior = shiftMonth(mesAtual, -1);
-
   const projecao = useMemo(() => {
     const cs = custos.filter(c => c.mes === mesAtual);
     const rs = receitas.filter(r => r.mes === mesAtual);
@@ -1206,12 +1415,29 @@ function DashboardTab({ custos, receitas, demandas, onNavigate }) {
     <div>
       <AttentionCard itens={atencao} onNavigate={onNavigate} />
 
-      <BalanceHero saldo={kpis.saldo} mesLabel={mesLabel} hidden={hidden} onToggle={() => setHidden(h => !h)} saldosPorMes={saldosPorMes} />
+      <BalanceHero
+        saldo={kpis.saldo}
+        trendAtual={saldoAteDiaAtual}
+        trendAnterior={saldoAteDiaAnterior}
+        mesLabel={mesLabel}
+        hidden={hidden}
+        onToggle={() => setHidden(h => !h)}
+        saldosPorMes={saldosPorMes}
+        porFonte={saldoPorFonte}
+        expanded={saldoAberto}
+        onToggleExpanded={() => setSaldoAberto(a => !a)}
+      />
 
       <StatRow stats={[
         { icon: <Wallet size={12} />, label: "Previsto", value: hidden ? "•••" : fmtBRL(kpis.totalPrevisto) },
-        { icon: <Check size={12} />, label: "Pago", value: hidden ? "•••" : fmtBRL(kpis.totalPago) },
-        { icon: <PiggyBank size={12} />, label: "Recebido", value: hidden ? "•••" : fmtBRL(kpis.totalRecebido) },
+        {
+          icon: <Check size={12} />, label: "Pago", value: hidden ? "•••" : fmtBRL(kpis.totalPago),
+          trend: pagoTrendPct !== null ? { pct: pagoTrendPct, good: pagoTrendPct <= 0 } : null
+        },
+        {
+          icon: <PiggyBank size={12} />, label: "Recebido", value: hidden ? "•••" : fmtBRL(kpis.totalRecebido),
+          trend: recebidoTrendPct !== null ? { pct: recebidoTrendPct, good: recebidoTrendPct >= 0 } : null
+        },
       ]} />
 
       <div className="in" style={{ background: C.card, boxShadow: shadowSm, borderRadius: 18, padding: "20px 22px", marginBottom: 20 }}>
@@ -1236,11 +1462,35 @@ function DashboardTab({ custos, receitas, demandas, onNavigate }) {
           <span style={{ display: "flex", alignItems: "center", gap: 6 }}><span style={{ width: 10, height: 10, borderRadius: 3, background: `repeating-linear-gradient(135deg, ${C.muted}88 0 3px, ${C.muted}33 3px 6px)` }} />ainda previsto</span>
         </div>
         <div style={{ marginTop: 18 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8 }}>
-            <span style={{ fontWeight: 700, fontSize: 12.5, color: C.ink }}>Orçamento do mês</span>
-            <span style={{ fontSize: 12.5, fontWeight: 700, color: kpis.pctUsado > 100 ? C.coral : C.emerald }}>{kpis.pctUsado.toFixed(0)}% usado</span>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
+            <span style={{ fontWeight: 700, fontSize: 12.5, color: C.ink }}>Ritmo do mês</span>
+            {ritmo.disponivel && (
+              <span style={{ fontSize: 12.5, fontWeight: 700, color: ritmo.pct > 150 ? C.coral : ritmo.pct > 100 ? C.amber : C.emerald }}>
+                {ritmo.pct.toFixed(0)}% do ritmo normal
+              </span>
+            )}
           </div>
-          <ProgressBar pct={kpis.pctUsado} color="linear-gradient(90deg, #00E0A8, #22D3EE)" />
+          {ritmo.disponivel ? (
+            <>
+              <div style={{ fontSize: 11, color: C.faint, marginBottom: 8 }}>
+                Comparado ao que você normalmente já tinha pago até o dia {ritmo.diaRef}, nos últimos {ritmo.nMeses === 1 ? "mês" : `${ritmo.nMeses} meses`} — não à média do mês inteiro
+              </div>
+              <ProgressBar
+                pct={ritmo.pct}
+                color="linear-gradient(90deg, #00E0A8, #22D3EE)"
+                overColor={ritmo.pct > 150 ? "linear-gradient(90deg,#FFB929,#FF5A68)" : "linear-gradient(90deg,#FFC53D,#FFB929)"}
+              />
+              <div style={{ fontSize: 11, color: C.faint, marginTop: 8 }}>
+                Pago até agora: <strong style={{ color: C.ink }}>{hidden ? "•••" : fmtBRL(ritmo.pagoAteAgora)}</strong>
+                {" · "}Normal até o dia {ritmo.diaRef}: <strong style={{ color: C.ink }}>{hidden ? "•••" : fmtBRL(ritmo.mediaAteODia)}</strong>
+                {" · "}Média mensal: <strong style={{ color: C.ink }}>{hidden ? "•••" : fmtBRL(ritmo.mediaMensal)}</strong>
+              </div>
+            </>
+          ) : (
+            <div style={{ fontSize: 12, color: C.muted, padding: "6px 0" }}>
+              Ainda não há meses anteriores com custos pagos suficientes para comparar o ritmo deste mês.
+            </div>
+          )}
         </div>
       </div>
 
@@ -1259,7 +1509,7 @@ function DashboardTab({ custos, receitas, demandas, onNavigate }) {
                     <Pie data={porFonte} dataKey="value" nameKey="name" innerRadius={36} outerRadius={60} paddingAngle={2}>
                       {porFonte.map((f) => <Cell key={f.name} fill={fonteColor(f.name)} />)}
                     </Pie>
-                    <Tooltip formatter={(v) => fmtBRL(v)} contentStyle={{ borderRadius: 10, border: "none", background: C.card, boxShadow: shadowMd, fontSize: 12.5, color: C.ink }} itemStyle={{ color: C.ink }} labelStyle={{ color: C.muted }} />
+                    <Tooltip content={<RichTooltip />} />
                   </PieChart>
                 </ResponsiveContainer>
               </div>
@@ -1288,7 +1538,7 @@ function DashboardTab({ custos, receitas, demandas, onNavigate }) {
                     <Pie data={porCategoria} dataKey="value" nameKey="name" innerRadius={36} outerRadius={60} paddingAngle={2}>
                       {porCategoria.map((f) => <Cell key={f.name} fill={catColor(f.name)} />)}
                     </Pie>
-                    <Tooltip formatter={(v) => fmtBRL(v)} contentStyle={{ borderRadius: 10, border: "none", background: C.card, boxShadow: shadowMd, fontSize: 12.5, color: C.ink }} itemStyle={{ color: C.ink }} labelStyle={{ color: C.muted }} />
+                    <Tooltip content={<RichTooltip />} />
                   </PieChart>
                 </ResponsiveContainer>
               </div>
@@ -1320,7 +1570,7 @@ function DashboardTab({ custos, receitas, demandas, onNavigate }) {
                 </defs>
                 <XAxis dataKey="mes" tick={{ fontSize: 11, fill: C.faint }} axisLine={{ stroke: C.border }} tickLine={false} />
                 <YAxis hide />
-                <Tooltip formatter={(v) => fmtBRL(v)} contentStyle={{ borderRadius: 10, border: "none", background: C.card, boxShadow: shadowMd, fontSize: 12.5, color: C.ink }} itemStyle={{ color: C.ink }} labelStyle={{ color: C.muted }} />
+                <Tooltip content={<RichTooltip colorMap={{ Pago: "#E8434F", Recebido: "#00B98A" }} />} />
                 <Bar dataKey="Pago" fill="url(#gPago)" radius={[4, 4, 0, 0]} />
                 <Bar dataKey="Recebido" fill="url(#gRecebido)" radius={[4, 4, 0, 0]} />
               </BarChart>
@@ -1336,11 +1586,14 @@ function DashboardTab({ custos, receitas, demandas, onNavigate }) {
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               {topCustos.map((c, i) => {
                 const v = Number(c.valorPago ?? c.valorPrevisto ?? 0);
+                const intensidade = v / topMax; // 0..1, share of the heaviest cost this month
+                const tint = intensidade > 0.7 ? C.coralSoft : intensidade > 0.4 ? C.amberSoft : "transparent";
+                const valueColor = intensidade > 0.7 ? C.coral : intensidade > 0.4 ? C.amber : C.muted;
                 return (
-                  <div key={c.id}>
+                  <div key={c.id} style={{ background: tint, borderRadius: 8, padding: "5px 7px", margin: "-5px -7px" }}>
                     <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, marginBottom: 4 }}>
                       <span style={{ color: C.ink, fontWeight: 600 }}>{c.descricao}</span>
-                      <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: C.muted }}>{fmtBRL(v)}</span>
+                      <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: valueColor, fontWeight: intensidade > 0.7 ? 700 : 400 }}>{fmtBRL(v)}</span>
                     </div>
                     <ProgressBar pct={(v / topMax) * 100} color={fonteColor(c.fonte)} height={6} />
                   </div>
@@ -1363,7 +1616,7 @@ function DashboardTab({ custos, receitas, demandas, onNavigate }) {
                       tick={{ fontSize: 9.5, fill: C.faint }} axisLine={{ stroke: C.border }} tickLine={false}
                       tickFormatter={(v) => v.replace("Conta ", "").replace("Débito Automático", "Déb. Auto.")} />
                     <YAxis hide />
-                    <Tooltip formatter={(v) => fmtBRL(v)} contentStyle={{ borderRadius: 10, border: "none", background: C.card, boxShadow: shadowMd, fontSize: 12.5, color: C.ink }} itemStyle={{ color: C.ink }} labelStyle={{ color: C.muted }} />
+                    <Tooltip content={<RichTooltip colorMap={{ Anterior: "#5C6485", Atual: "#E8434F" }} />} />
                     <Bar dataKey="Anterior" fill="#5C6485" radius={[4, 4, 0, 0]} />
                     <Bar dataKey="Atual" fill="url(#gPago)" radius={[4, 4, 0, 0]} />
                   </BarChart>
