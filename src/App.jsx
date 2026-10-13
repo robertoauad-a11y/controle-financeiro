@@ -62,6 +62,27 @@ const uid = (p) => `${p}${Date.now().toString(36)}${Math.random().toString(36).s
 // Turns free text like "aluguel 2675 dia 10" or "recebi 800 freelance dia 15"
 // into a draft entry. Deliberately forgiving — it only has to get close;
 // the person confirms/edits everything before it's saved.
+// Fonte keywords the quick-entry text is scanned for — longer/more specific
+// phrases first, so "conta corrente" matches before a bare "conta" would.
+const FONTE_KEYWORDS = [
+  { re: /\bconta\s+corrente\b/i, fonte: "Conta Corrente" },
+  { re: /\bconta\s+sal[áa]rio\b/i, fonte: "Conta Salário" },
+  { re: /\bd[ée]bito\s+autom[áa]tico\b/i, fonte: "Débito Automático" },
+  { re: /\btransfer[êe]ncia\b/i, fonte: "Transferência" },
+  { re: /\bdinheiro\b/i, fonte: "Dinheiro" },
+  { re: /\bpix\b/i, fonte: "PIX" },
+  { re: /\bbb\b/i, fonte: "BB" },
+];
+const fonteEmTexto = (segment) => {
+  for (const { re, fonte } of FONTE_KEYWORDS) if (re.test(segment)) return fonte;
+  return null;
+};
+
+// Parses free text from the "+" quick-entry FAB. Normally returns a single
+// draft entry, but when the sentence names two or more amounts each tied to
+// their OWN fonte ("1500 em dinheiro e 299 em pix") — a split payment across
+// sources, same as launching separate custo records by hand — it returns one
+// draft per amount+fonte instead of silently keeping only the largest number.
 function parseQuickEntry(rawText) {
   let text = rawText.trim();
   const lower = text.toLowerCase();
@@ -87,35 +108,62 @@ function parseQuickEntry(rawText) {
   }
   if (!dataStr) dataStr = new Date().toISOString().slice(0, 10);
 
-  let valor = 0;
-  const valorMatches = [...text.matchAll(/\d{1,3}(?:\.\d{3})*(?:,\d{1,2})?|\d+(?:,\d{1,2})?/g)];
-  if (valorMatches.length) {
-    const parsed = valorMatches.map(m => ({ raw: m[0], value: parseValorBR(m[0]) }));
-    // The money amount is virtually always the largest number in a short entry —
-    // day-of-month remnants and item counts ("parcela 3") are small by comparison.
-    const best = parsed.reduce((a, b) => (b.value > a.value ? b : a));
-    valor = best.value;
-    text = text.replace(best.raw, " ");
+  // "salário" alone suggests income ("recebi meu salário"), but "conta
+  // salário" is just the fonte name — strip recognized fonte phrases first so
+  // mentioning that account doesn't misclassify a custo as a receita.
+  let lowerSemFonte = lower;
+  for (const { re } of FONTE_KEYWORDS) lowerSemFonte = lowerSemFonte.replace(re, " ");
+  const isReceita = /receb|sal[áa]rio|entrada|venda|renda|dep[óo]sito/i.test(lowerSemFonte);
+  const jaRecebido = /\breceb/i.test(lowerSemFonte);
+  const jaPago = /\bpagu?ei\b|\bpago\b/i.test(lowerSemFonte);
+  const status = isReceita ? (jaRecebido ? "Recebido" : "Pendente") : (jaPago ? "Pago" : "Pendente");
+  const tipo = isReceita ? "receita" : "custo";
+
+  // The dot-grouped form only applies when a ".XXX" group actually follows
+  // (the "+" below, not "*") — otherwise a plain 4+ digit run like "2675" or
+  // "1500" was being cut to its first 3 digits ("267"/"150") by the grouped
+  // alternative matching before the plain one got a chance to run.
+  const valorMatches = [...text.matchAll(/\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d+(?:,\d{1,2})?/g)]
+    .map(m => ({ raw: m[0], value: parseValorBR(m[0]), index: m.index }));
+
+  // The fonte "for" a given amount is whatever fonte keyword sits between it
+  // and the next amount (or the end of the text) — e.g. in "1500 em dinheiro
+  // e 299 em pix", "dinheiro" belongs to 1500 and "pix" belongs to 299.
+  const comFonte = valorMatches.map((v, i) => {
+    const fim = i + 1 < valorMatches.length ? valorMatches[i + 1].index : text.length;
+    return { ...v, fonte: fonteEmTexto(text.slice(v.index, fim)) };
+  }).filter(v => v.fonte);
+  const fontesDistintas = new Set(comFonte.map(v => v.fonte));
+
+  const buildDescricao = () => {
+    let t = text;
+    for (const v of valorMatches) t = t.replace(v.raw, " ");
+    for (const { re } of FONTE_KEYWORDS) t = t.replace(re, " ");
+    // Drop connector/filler words so only the subject remains — "Recebi aluguel do
+    // VIA IPIRANGA, no dia 10, no valor de 3500" -> "ALUGUEL VIA IPIRANGA".
+    t = t
+      .replace(/\br\$/gi, " ").replace(/\breais?\b/gi, " ")
+      .replace(/\bno valor de\b/gi, " ").replace(/\bvalor de\b/gi, " ")
+      .replace(/\bno dia\b/gi, " ").replace(/\bpagamento de\b/gi, " ")
+      .replace(/\brecebi\b/gi, " ").replace(/\bpaguei\b/gi, " ").replace(/\bem\b/gi, " ")
+      .replace(/[,.]/g, " ")
+      .replace(/\b(de|da|do|e)\b/gi, " ")
+      .replace(/\s+/g, " ").trim();
+    return t.toUpperCase() || "NOVO LANÇAMENTO";
+  };
+  const descricao = buildDescricao();
+
+  // Split into several drafts only when at least two amounts each resolved to
+  // a DIFFERENT fonte — a confident "part here, part there" signal. A lone
+  // second number with no fonte word (an installment count, a day already
+  // consumed above, etc.) stays a single entry, same as before.
+  if (comFonte.length >= 2 && fontesDistintas.size >= 2) {
+    return comFonte.map(v => ({ tipo, descricao, valor: v.value, data: dataStr, status, fonte: v.fonte }));
   }
 
-  // Drop connector/filler words so only the subject remains — "Recebi aluguel do
-  // VIA IPIRANGA, no dia 10, no valor de 3500" -> "ALUGUEL VIA IPIRANGA".
-  text = text
-    .replace(/\br\$/gi, " ").replace(/\breais?\b/gi, " ")
-    .replace(/\bno valor de\b/gi, " ").replace(/\bvalor de\b/gi, " ")
-    .replace(/\bno dia\b/gi, " ").replace(/\bpagamento de\b/gi, " ")
-    .replace(/\brecebi\b/gi, " ").replace(/\bpaguei\b/gi, " ")
-    .replace(/[,.]/g, " ")
-    .replace(/\b(de|da|do)\b/gi, " ")
-    .replace(/\s+/g, " ").trim();
-  const descricao = text.toUpperCase();
-
-  const isReceita = /receb|sal[áa]rio|entrada|venda|renda|dep[óo]sito/i.test(lower);
-  const jaRecebido = /\breceb/i.test(lower);
-  const jaPago = /\bpagu?ei\b|\bpago\b/i.test(lower);
-  const status = isReceita ? (jaRecebido ? "Recebido" : "Pendente") : (jaPago ? "Pago" : "Pendente");
-
-  return { tipo: isReceita ? "receita" : "custo", descricao: descricao || "NOVO LANÇAMENTO", valor, data: dataStr, status };
+  const valor = valorMatches.length ? valorMatches.reduce((a, b) => (b.value > a.value ? b : a)).value : 0;
+  const fonte = fonteEmTexto(text);
+  return [{ tipo, descricao, valor, data: dataStr, status, fonte }];
 }
 const todayISO = () => new Date().toISOString().slice(0,10);
 const currentMonth = () => new Date().toISOString().slice(0,7);
@@ -555,10 +603,12 @@ function QuickAddFab({ onAddCusto, onAddReceita }) {
 
   const reset = () => { setOpen(false); setStep("input"); setText(""); setDraft(null); setSaving(false); };
 
+  // draft is always an array — 1 item normally, 2+ when the sentence named a
+  // split payment across different fontes (see parseQuickEntry).
   const analisar = () => {
     if (!text.trim()) return;
     const parsed = parseQuickEntry(text);
-    if (!isValorValido(parsed.valor)) {
+    if (parsed.every(p => !isValorValido(p.valor))) {
       const continuar = window.confirm(
         "Não encontrei nenhum valor no texto digitado. Quer continuar e preencher o valor manualmente na próxima tela?"
       );
@@ -568,34 +618,41 @@ function QuickAddFab({ onAddCusto, onAddReceita }) {
     setStep("review");
   };
 
+  const updateDraft = (i, patch) => setDraft(ds => ds.map((d, j) => (j === i ? { ...d, ...patch } : d)));
+  const removeDraft = (i) => setDraft(ds => ds.filter((_, j) => j !== i));
+
   const salvar = async () => {
-    if (saving) return;
-    if (!draft.descricao || !draft.data || draft.valor === "") return;
-    const valorNum = parseValorBR(draft.valor);
-    if (!isValorValido(valorNum)) {
-      alert("O valor precisa ser maior que zero.");
+    if (saving || !draft || draft.length === 0) return;
+    if (draft.some(d => !d.descricao || !d.data || d.valor === "")) return;
+    const valores = draft.map(d => parseValorBR(d.valor));
+    if (valores.some(v => !isValorValido(v))) {
+      alert("Cada lançamento precisa de um valor maior que zero.");
       return;
     }
-    if (!confirmDateSanity(draft.data, draft.tipo === "custo" ? "data de vencimento" : "data de recebimento")) return;
-    const mes = draft.data.slice(0, 7);
-    const anoNum = parseInt(draft.data.slice(0, 4), 10);
-    const status = draft.status || "Pendente";
+    if (!confirmDateSanity(draft[0].data, draft[0].tipo === "custo" ? "data de vencimento" : "data de recebimento")) return;
     setSaving(true);
     try {
-      if (draft.tipo === "custo") {
-        await onAddCusto({
-          mes, ano: anoNum, descricao: draft.descricao,
-          vencimento: draft.data, dataPagamento: status === "Pago" ? draft.data : "",
-          valorPrevisto: valorNum, valorPago: status === "Pago" ? valorNum : null,
-          fonte: draft.fonte || FONTES[0], status, obs: ""
-        });
-      } else {
-        await onAddReceita({
-          mes, ano: anoNum, descricao: draft.descricao, dataRecebimento: draft.data,
-          valorPrevisto: valorNum, valorRecebido: status === "Recebido" ? valorNum : null,
-          categoria: draft.categoria || "", contaDestino: draft.fonte || FONTES[1],
-          status, obs: ""
-        });
+      for (let i = 0; i < draft.length; i++) {
+        const d = draft[i];
+        const valorNum = valores[i];
+        const mes = d.data.slice(0, 7);
+        const anoNum = parseInt(d.data.slice(0, 4), 10);
+        const status = d.status || "Pendente";
+        if (d.tipo === "custo") {
+          await onAddCusto({
+            mes, ano: anoNum, descricao: d.descricao,
+            vencimento: d.data, dataPagamento: status === "Pago" ? d.data : "",
+            valorPrevisto: valorNum, valorPago: status === "Pago" ? valorNum : null,
+            fonte: d.fonte || FONTES[0], status, obs: ""
+          });
+        } else {
+          await onAddReceita({
+            mes, ano: anoNum, descricao: d.descricao, dataRecebimento: d.data,
+            valorPrevisto: valorNum, valorRecebido: status === "Recebido" ? valorNum : null,
+            categoria: d.categoria || "", contaDestino: d.fonte || FONTES[1],
+            status, obs: ""
+          });
+        }
       }
       reset();
     } finally {
@@ -630,33 +687,58 @@ function QuickAddFab({ onAddCusto, onAddReceita }) {
       )}
 
       {open && step === "review" && draft && (
-        <Modal title="Confirmar lançamento" onClose={reset}>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-            <Field label="Tipo">
-              <div style={{ display: "flex", gap: 8 }}>
-                {["custo", "receita"].map(t => (
-                  <button key={t} type="button" onClick={() => setDraft(d => ({ ...d, tipo: t }))} style={{
-                    flex: 1, padding: "9px 0", borderRadius: 10, border: `1px solid ${draft.tipo === t ? C.emerald : C.border}`,
-                    background: draft.tipo === t ? C.emeraldSoft : C.card, color: draft.tipo === t ? C.emerald : C.muted,
-                    fontWeight: 700, fontSize: 12.5, cursor: "pointer"
-                  }}>{t === "custo" ? "Custo" : "Receita"}</button>
-                ))}
-              </div>
-            </Field>
-            <Field label="Valor (R$)"><TextInput type="text" inputMode="decimal" placeholder="0,00" value={draft.valor} onChange={e => setDraft({ ...draft, valor: e.target.value })} /></Field>
-            <Field label="Descrição"><TextInput style={{ gridColumn: "span 2" }} value={draft.descricao} onChange={e => setDraft({ ...draft, descricao: e.target.value })} /></Field>
-            <Field label={draft.tipo === "custo" ? "Vencimento" : "Recebimento"}>
-              <TextInput type="date" value={draft.data} onChange={e => setDraft({ ...draft, data: e.target.value })} />
-            </Field>
-            <Field label={draft.tipo === "custo" ? "Fonte de Pagamento" : "Conta de Destino"}>
-              <SelectInput options={FONTES} value={draft.fonte || (draft.tipo === "custo" ? FONTES[0] : FONTES[1])} onChange={e => setDraft({ ...draft, fonte: e.target.value })} />
-            </Field>
-            <Field label="Status">
-              <SelectInput options={draft.tipo === "custo" ? STATUS_CUSTO : STATUS_RECEITA} value={draft.status || "Pendente"} onChange={e => setDraft({ ...draft, status: e.target.value })} />
-            </Field>
-            <button type="button" onClick={salvar} disabled={saving} style={{ ...addBtnStyle, gridColumn: "span 2", justifyContent: "center", marginTop: 4, opacity: saving ? 0.7 : 1, cursor: saving ? "default" : "pointer" }}>
-              <Check size={16} /> {saving ? "Salvando..." : "Salvar"}
+        <Modal
+          title={draft.length > 1 ? `Confirmar ${draft.length} lançamentos` : "Confirmar lançamento"}
+          onClose={reset}
+          footer={
+            <button type="button" onClick={salvar} disabled={saving} style={{ ...addBtnStyle, width: "100%", justifyContent: "center", opacity: saving ? 0.7 : 1, cursor: saving ? "default" : "pointer" }}>
+              <Check size={16} /> {saving ? "Salvando..." : draft.length > 1 ? `Salvar os ${draft.length} lançamentos` : "Salvar"}
             </button>
+          }
+        >
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            {draft.length > 1 && (
+              <div style={{ fontSize: 12, color: C.muted, lineHeight: 1.5 }}>
+                Encontrei {draft.length} valores com fontes diferentes nessa frase — conferi cada um separado, como um pagamento dividido. Confira antes de salvar.
+              </div>
+            )}
+            {draft.map((d, i) => (
+              <div key={i} style={{
+                display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12,
+                ...(draft.length > 1 ? { padding: 14, border: `1px solid ${C.border}`, borderRadius: 14 } : {})
+              }}>
+                {draft.length > 1 && (
+                  <div style={{ gridColumn: "span 2", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span style={{ fontSize: 11.5, fontWeight: 700, color: C.muted, textTransform: "uppercase", letterSpacing: 0.3 }}>Lançamento {i + 1}</span>
+                    <button type="button" onClick={() => removeDraft(i)} style={{ border: "none", background: "transparent", color: C.coral, cursor: "pointer", display: "flex", alignItems: "center", padding: 2 }} aria-label="Remover este lançamento">
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
+                )}
+                <Field label="Tipo">
+                  <div style={{ display: "flex", gap: 8 }}>
+                    {["custo", "receita"].map(t => (
+                      <button key={t} type="button" onClick={() => updateDraft(i, { tipo: t })} style={{
+                        flex: 1, padding: "9px 0", borderRadius: 10, border: `1px solid ${d.tipo === t ? C.emerald : C.border}`,
+                        background: d.tipo === t ? C.emeraldSoft : C.card, color: d.tipo === t ? C.emerald : C.muted,
+                        fontWeight: 700, fontSize: 12.5, cursor: "pointer"
+                      }}>{t === "custo" ? "Custo" : "Receita"}</button>
+                    ))}
+                  </div>
+                </Field>
+                <Field label="Valor (R$)"><TextInput type="text" inputMode="decimal" placeholder="0,00" value={d.valor} onChange={e => updateDraft(i, { valor: e.target.value })} /></Field>
+                <Field label="Descrição"><TextInput style={{ gridColumn: "span 2" }} value={d.descricao} onChange={e => updateDraft(i, { descricao: e.target.value })} /></Field>
+                <Field label={d.tipo === "custo" ? "Vencimento" : "Recebimento"}>
+                  <TextInput type="date" value={d.data} onChange={e => updateDraft(i, { data: e.target.value })} />
+                </Field>
+                <Field label={d.tipo === "custo" ? "Fonte de Pagamento" : "Conta de Destino"}>
+                  <SelectInput options={FONTES} value={d.fonte || (d.tipo === "custo" ? FONTES[0] : FONTES[1])} onChange={e => updateDraft(i, { fonte: e.target.value })} />
+                </Field>
+                <Field label="Status">
+                  <SelectInput options={d.tipo === "custo" ? STATUS_CUSTO : STATUS_RECEITA} value={d.status || "Pendente"} onChange={e => updateDraft(i, { status: e.target.value })} />
+                </Field>
+              </div>
+            ))}
           </div>
         </Modal>
       )}
