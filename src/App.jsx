@@ -165,6 +165,32 @@ function parseQuickEntry(rawText) {
   const fonte = fonteEmTexto(text);
   return [{ tipo, descricao, valor, data: dataStr, status, fonte }];
 }
+
+// Words too common to mean anything when comparing a custo's descrição
+// against a demanda's nome — filtered out of both sides before comparing.
+const STOPWORDS_PT = new Set(["DE","DA","DO","DOS","DAS","E","A","O","OS","AS","EM","NO","NA","NOS","NAS","PARA","COM","UM","UMA"]);
+const normTokens = (s) => (s || "")
+  .normalize("NFD").replace(/[̀-ͯ]/g, "")
+  .toUpperCase().replace(/[^A-Z0-9\s]/g, " ")
+  .split(/\s+/).filter(w => w.length > 2 && !STOPWORDS_PT.has(w));
+
+// Suggests an open demanda (Pendente/Em Andamento) that a quick-entry custo
+// likely resolves — e.g. a "Colchão Rubem" custo matching the "Colchão
+// Rubem" demanda. Conservative on purpose: only suggests when EVERY
+// significant word of the demanda's nome shows up in the custo's descrição,
+// so a partial/loose overlap never triggers a wrong suggestion. The person
+// still confirms it with a checkbox before anything closes.
+const matchDemanda = (descricao, demandas) => {
+  const tokensDesc = new Set(normTokens(descricao));
+  if (tokensDesc.size === 0) return null;
+  for (const d of demandas) {
+    if (d.status === "Concluída") continue;
+    const tokensNome = normTokens(d.nome);
+    if (tokensNome.length === 0) continue;
+    if (tokensNome.every(t => tokensDesc.has(t))) return d;
+  }
+  return null;
+};
 const todayISO = () => new Date().toISOString().slice(0,10);
 const currentMonth = () => new Date().toISOString().slice(0,7);
 const parseValorBR = (raw) => {
@@ -594,7 +620,7 @@ const NAV_ITEMS = [
 
 // Global action, not a screen: reachable from any tab, opens a sheet on top
 // of whatever the person is doing, and returns them there once confirmed.
-function QuickAddFab({ onAddCusto, onAddReceita }) {
+function QuickAddFab({ onAddCusto, onAddReceita, demandas = [], onResolveDemanda }) {
   const [open, setOpen] = useState(false);
   const [step, setStep] = useState("input");
   const [text, setText] = useState("");
@@ -604,10 +630,17 @@ function QuickAddFab({ onAddCusto, onAddReceita }) {
   const reset = () => { setOpen(false); setStep("input"); setText(""); setDraft(null); setSaving(false); };
 
   // draft is always an array — 1 item normally, 2+ when the sentence named a
-  // split payment across different fontes (see parseQuickEntry).
+  // split payment across different fontes (see parseQuickEntry). Each custo
+  // entry also gets a matchedDemanda suggestion when its descrição clearly
+  // corresponds to an open demanda (see matchDemanda) — off by default,
+  // the person ticks it to also mark that demanda Concluída on save.
   const analisar = () => {
     if (!text.trim()) return;
-    const parsed = parseQuickEntry(text);
+    const parsed = parseQuickEntry(text).map(d => {
+      if (d.tipo !== "custo") return d;
+      const matched = matchDemanda(d.descricao, demandas);
+      return matched ? { ...d, matchedDemandaId: matched.id, matchedDemandaNome: matched.nome, resolverDemanda: true } : d;
+    });
     if (parsed.every(p => !isValorValido(p.valor))) {
       const continuar = window.confirm(
         "Não encontrei nenhum valor no texto digitado. Quer continuar e preencher o valor manualmente na próxima tela?"
@@ -619,11 +652,17 @@ function QuickAddFab({ onAddCusto, onAddReceita }) {
   };
 
   const updateDraft = (i, patch) => setDraft(ds => ds.map((d, j) => (j === i ? { ...d, ...patch } : d)));
-  const removeDraft = (i) => setDraft(ds => ds.filter((_, j) => j !== i));
+  // Removing the last remaining card leaves nothing to confirm, so close the
+  // whole flow instead of stranding an empty review screen.
+  const removeDraft = (i) => {
+    const next = draft.filter((_, j) => j !== i);
+    if (next.length === 0) reset(); else setDraft(next);
+  };
 
   const salvar = async () => {
     if (saving || !draft || draft.length === 0) return;
-    if (draft.some(d => !d.descricao || !d.data || d.valor === "")) return;
+    if (draft.some(d => !d.descricao || !d.descricao.trim())) { alert("Preencha a descrição de todos os lançamentos."); return; }
+    if (draft.some(d => !d.data)) { alert("Preencha a data de todos os lançamentos."); return; }
     const valores = draft.map(d => parseValorBR(d.valor));
     if (valores.some(v => !isValorValido(v))) {
       alert("Cada lançamento precisa de um valor maior que zero.");
@@ -645,6 +684,9 @@ function QuickAddFab({ onAddCusto, onAddReceita }) {
             valorPrevisto: valorNum, valorPago: status === "Pago" ? valorNum : null,
             fonte: d.fonte || FONTES[0], status, obs: ""
           });
+          if (d.matchedDemandaId && d.resolverDemanda && onResolveDemanda) {
+            await onResolveDemanda(d.matchedDemandaId);
+          }
         } else {
           await onAddReceita({
             mes, ano: anoNum, descricao: d.descricao, dataRecebimento: d.data,
@@ -737,6 +779,16 @@ function QuickAddFab({ onAddCusto, onAddReceita }) {
                 <Field label="Status">
                   <SelectInput options={d.tipo === "custo" ? STATUS_CUSTO : STATUS_RECEITA} value={d.status || "Pendente"} onChange={e => updateDraft(i, { status: e.target.value })} />
                 </Field>
+                {d.matchedDemandaId && (
+                  <label style={{
+                    gridColumn: "span 2", display: "flex", alignItems: "center", gap: 8,
+                    padding: "9px 12px", borderRadius: 10, background: C.emeraldSoft,
+                    fontSize: 12.5, color: C.emerald, fontWeight: 600, cursor: "pointer"
+                  }}>
+                    <input type="checkbox" checked={!!d.resolverDemanda} onChange={e => updateDraft(i, { resolverDemanda: e.target.checked })} style={{ accentColor: C.emerald, width: 15, height: 15 }} />
+                    Marcar a demanda "{d.matchedDemandaNome}" como Concluída
+                  </label>
+                )}
               </div>
             ))}
           </div>
@@ -1068,7 +1120,7 @@ export default function App() {
       </main>
 
       <BottomNav tab={tab} setTab={setTab} />
-      <QuickAddFab onAddCusto={addCusto} onAddReceita={addReceita} />
+      <QuickAddFab onAddCusto={addCusto} onAddReceita={addReceita} demandas={data.demandas} onResolveDemanda={(id) => updateDemandaStatus(id, "Concluída")} />
 
       {saveError && (
         <div style={{
