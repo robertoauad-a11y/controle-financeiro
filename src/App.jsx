@@ -152,7 +152,9 @@ function parseQuickEntry(rawText) {
     // are matched with Unicode-aware lookarounds instead.
     const palavra = (alts) => new RegExp(`(?<![\\p{L}\\d])(?:${alts})(?![\\p{L}\\d])`, "giu");
     t = t
-      .replace(palavra("hoje|o|a|os|as|no|na|nos|nas"), " ")
+      .replace(palavra("hoje|no|na|nos|nas"), " ")
+      // A trailing "a"/"o" is part of the name ("Plano A"), not an article.
+      .replace(palavra("o|a|os|as"), (m, off, whole) => (whole.slice(off + m.length).trim() === "" ? m : " "))
       .replace(palavra("feito|feita|quitei|quitado|liquidei|liquidado|fiz"), " ")
       .replace(palavra("de|da|do|e"), " ")
       .replace(/\s+/g, " ").trim();
@@ -664,8 +666,8 @@ function QuickAddFab({ onAddCusto, onAddReceita, demandas = [], onResolveDemanda
   // draft is always an array — 1 item normally, 2+ when the sentence named a
   // split payment across different fontes (see parseQuickEntry). Each custo
   // entry also gets a matchedDemanda suggestion when its descrição clearly
-  // corresponds to an open demanda (see matchDemanda) — off by default,
-  // the person ticks it to also mark that demanda Concluída on save.
+  // corresponds to an open demanda (see matchDemanda) — pre-checked,
+  // the person can untick it; ticked ones also mark that demanda Concluída on save.
   const analisar = () => {
     if (!text.trim()) return;
     const parsed = parseQuickEntry(text).map(d => {
@@ -735,14 +737,32 @@ function QuickAddFab({ onAddCusto, onAddReceita, demandas = [], onResolveDemanda
     }
   };
 
+  // The button slides away while scrolling down (so it never covers a value or the
+  // trash icon of the row underneath) and comes back as soon as the person scrolls up.
+  const [escondido, setEscondido] = useState(false);
+  useEffect(() => {
+    let ultimo = window.scrollY || 0;
+    const onScroll = () => {
+      const y = window.scrollY || 0;
+      if (y > ultimo + 8 && y > 80) setEscondido(true);
+      else if (y < ultimo - 8 || y <= 80) setEscondido(false);
+      ultimo = y;
+    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+
   return (
     <>
-      <button className="tap" onClick={() => setOpen(true)} title="Lançamento rápido" style={{
+      <button className="tap" onClick={() => setOpen(true)} title="Lançamento rápido" aria-hidden={escondido} tabIndex={escondido ? -1 : 0} style={{
         position: "fixed", right: 18, bottom: "calc(92px + env(safe-area-inset-bottom))", zIndex: 42,
         width: 56, height: 56, borderRadius: 28, border: "none",
         background: C.emerald, color: "#0A0E1C", cursor: "pointer",
         display: "flex", alignItems: "center", justifyContent: "center",
-        boxShadow: "0 10px 26px rgba(0,224,168,0.45)"
+        boxShadow: "0 10px 26px rgba(0,224,168,0.45)",
+        transform: escondido ? "translateY(110px) scale(0.9)" : "translateY(0) scale(1)",
+        opacity: escondido ? 0 : 1, pointerEvents: escondido ? "none" : "auto",
+        transition: "transform .25s ease, opacity .2s ease"
       }}>
         <Plus size={26} strokeWidth={2.6} />
       </button>
@@ -1332,9 +1352,29 @@ function useAtencao(custos, demandas, dias = 7) {
   }, [custos, demandas, dias]);
 }
 
-function AttentionCard({ itens, onNavigate, onConcluirDemanda, title = "Precisa de atenção", limit = 6 }) {
+// "Atrasado há 20 dias" stays in days; very old items read better in months.
+const fmtAtraso = (dias) => {
+  if (!(dias > 0)) return "Atrasado";
+  if (dias < 30) return `Atrasado há ${dias} ${dias === 1 ? "dia" : "dias"}`;
+  const meses = Math.floor(dias / 30);
+  return `Atrasado há ${meses} ${meses === 1 ? "mês" : "meses"}`;
+};
+
+function AttentionCard({ itens, onNavigate, onConcluirDemanda, title = "Precisa de atenção", limit = 6, emptyText, okWhenEmpty = false }) {
   const [aberto, setAberto] = useState(false);
-  if (itens.length === 0) return null;
+  if (itens.length === 0) {
+    // Cards with an emptyText stay on screen with a calm message; the others simply disappear.
+    if (!emptyText) return null;
+    return (
+      <div className="in" style={{ background: C.card, boxShadow: shadowSm, borderRadius: 18, padding: "16px 18px", marginBottom: 20 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+          {okWhenEmpty ? <Check size={16} color={C.emerald} strokeWidth={2.6} /> : <Clock size={16} color={C.faint} />}
+          <span style={{ fontWeight: 700, fontSize: 13, color: C.ink, textTransform: "uppercase", letterSpacing: 0.4 }}>{title}</span>
+        </div>
+        <div style={{ fontSize: 12.5, color: okWhenEmpty ? C.emerald : C.muted, fontWeight: okWhenEmpty ? 600 : 400 }}>{emptyText}</div>
+      </div>
+    );
+  }
   const visiveis = aberto ? itens : itens.slice(0, limit);
   const escondidos = itens.length - limit;
   return (
@@ -1362,9 +1402,7 @@ function AttentionCard({ itens, onNavigate, onConcluirDemanda, title = "Precisa 
               {item.label}
             </span>
             <span style={{ fontSize: 11.5, fontWeight: 700, color: item.atrasado ? C.coral : C.amber, flexShrink: 0 }}>
-              {item.atrasado
-                ? (item.diasAtraso > 0 ? `Atrasado há ${item.diasAtraso} ${item.diasAtraso === 1 ? "dia" : "dias"}` : "Atrasado")
-                : fmtDate(item.data)}
+              {item.atrasado ? fmtAtraso(item.diasAtraso) : fmtDate(item.data)}
             </span>
             {item.tab === "demandas" && onConcluirDemanda && (
               <button
@@ -1465,7 +1503,12 @@ function DashboardTab({ custos, receitas, demandas, onNavigate, onConcluirDemand
   const mesAtual = currentMonth();
   const mesAnterior = shiftMonth(mesAtual, -1);
   const atencao = useAtencao(custos, demandas);
-  const proximos30 = useAtencao(custos, demandas, 30);
+  const proximos30Todos = useAtencao(custos, demandas, 30);
+  // "Próximos vencimentos" shows only what is NOT already listed in "Precisa de atenção" above.
+  const proximos30 = useMemo(() => {
+    const jaMostrados = new Set(atencao.map(i => i.id));
+    return proximos30Todos.filter(i => !jaMostrados.has(i.id));
+  }, [atencao, proximos30Todos]);
   const ritmo = useRitmoMes(custos, mesAtual);
 
   const receitasComparativo = useMemo(() => {
@@ -1631,7 +1674,8 @@ function DashboardTab({ custos, receitas, demandas, onNavigate, onConcluirDemand
 
   return (
     <div>
-      <AttentionCard itens={atencao} onNavigate={onNavigate} onConcluirDemanda={onConcluirDemanda} />
+      <AttentionCard itens={atencao} onNavigate={onNavigate} onConcluirDemanda={onConcluirDemanda}
+        emptyText="Tudo em dia — nada atrasado nem vencendo nos próximos 7 dias." okWhenEmpty />
 
       <BalanceHero
         saldo={kpis.saldo}
@@ -1773,10 +1817,10 @@ function DashboardTab({ custos, receitas, demandas, onNavigate, onConcluirDemand
           )}
         </div>
 
-        <div className="in" style={{ background: C.card, boxShadow: shadowSm, borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "160ms" }}>
+        <div className="in" style={{ background: C.card, boxShadow: shadowSm, borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "160ms", display: "flex", flexDirection: "column" }}>
           <div style={{ fontWeight: 700, fontSize: 13.5, color: C.ink, marginBottom: 10 }}>Pago x Recebido — últimos 6 meses</div>
-          <div style={{ width: "100%", height: 170 }}>
-            <ResponsiveContainer width="100%" height="100%">
+          <div style={{ width: "100%", flex: 1, minHeight: 170 }}>
+            <ResponsiveContainer width="100%" height="100%" minHeight={170}>
               <BarChart data={tendencia} barGap={4}>
                 <defs>
                   <linearGradient id="gPago" x1="0" y1="0" x2="0" y2="1">
@@ -1823,15 +1867,15 @@ function DashboardTab({ custos, receitas, demandas, onNavigate, onConcluirDemand
             </div>
           )}
         </div>
-        <div className="in" style={{ background: C.card, boxShadow: shadowSm, borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "240ms" }}>
+        <div className="in" style={{ background: C.card, boxShadow: shadowSm, borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "240ms", display: "flex", flexDirection: "column" }}>
           <div style={{ fontWeight: 700, fontSize: 13.5, color: C.ink, marginBottom: 4 }}>Este mês x mês anterior — por fonte</div>
           <div style={{ fontSize: 11.5, color: C.faint, marginBottom: 10 }}>{monthLabel(mesAnterior)} (cinza) x {mesLabel}</div>
           {comparativo.length === 0 ? (
             <div style={{ color: C.muted, fontSize: 13, padding: "16px 0", textAlign: "center" }}>Sem custos nos dois meses para comparar.</div>
           ) : (
             <>
-              <div style={{ width: "100%", height: 200 }}>
-                <ResponsiveContainer width="100%" height="100%">
+              <div style={{ width: "100%", flex: 1, minHeight: 200 }}>
+                <ResponsiveContainer width="100%" height="100%" minHeight={200}>
                   <BarChart data={comparativo} barGap={3} margin={{ bottom: 24 }}>
                     <XAxis dataKey="fonte" interval={0} angle={-35} textAnchor="end" height={50}
                       tick={{ fontSize: 9.5, fill: C.faint }} axisLine={{ stroke: C.border }} tickLine={false}
@@ -1853,14 +1897,14 @@ function DashboardTab({ custos, receitas, demandas, onNavigate, onConcluirDemand
           )}
         </div>
 
-        <div className="in" style={{ background: C.card, boxShadow: shadowSm, borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "280ms" }}>
+        <div className="in" style={{ background: C.card, boxShadow: shadowSm, borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "280ms", display: "flex", flexDirection: "column" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
             <span style={{ fontWeight: 700, fontSize: 13.5, color: C.ink }}>Saldo acumulado — {ano}</span>
             <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, fontWeight: 700, color: acumColor }}>{hidden ? "•••" : fmtBRL(acumAtual)}</span>
           </div>
           <div style={{ fontSize: 11.5, color: C.faint, marginBottom: 10 }}>Soma dos saldos mês a mês desde {inicioIdx === 0 ? "janeiro" : MESES[inicioIdx].toLowerCase()}</div>
-          <div style={{ width: "100%", height: 170 }}>
-            <ResponsiveContainer width="100%" height="100%">
+          <div style={{ width: "100%", flex: 1, minHeight: 170 }}>
+            <ResponsiveContainer width="100%" height="100%" minHeight={170}>
               <AreaChart data={acumulado}>
                 <defs>
                   <linearGradient id="gAcum" x1="0" y1="0" x2="0" y2="1">
@@ -1898,7 +1942,11 @@ function DashboardTab({ custos, receitas, demandas, onNavigate, onConcluirDemand
           )}
         </div>
 
-        <AttentionCard itens={proximos30} onNavigate={onNavigate} onConcluirDemanda={onConcluirDemanda} title="Próximos vencimentos (30 dias)" limit={8} />
+        {/* alignSelf: start — a short list must not be stretched to the height of its neighbour */}
+        <div style={{ alignSelf: "start" }}>
+          <AttentionCard itens={proximos30} onNavigate={onNavigate} onConcluirDemanda={onConcluirDemanda} title="Próximos vencimentos (30 dias)" limit={8}
+            emptyText={atencao.length > 0 ? "Nenhum outro vencimento nos próximos 30 dias." : "Nenhum vencimento nos próximos 30 dias."} />
+        </div>
       </div>
     </div>
   );
@@ -1938,6 +1986,28 @@ function CardList({ rows, onRemove, onEdit, empty, render }) {
       ))}
     </div>
   );
+}
+
+// Costs paid across several fontes are stored as one record per fonte with the same
+// descrição. Inside a status group they are kept side by side (first-appearance order)
+// and tagged so the list can draw them as one connected block.
+function agruparDivididos(items) {
+  const chave = (c) => `${(c.descricao || "").trim().toLowerCase()}|${c.mes}`;
+  const mapa = new Map();
+  for (const c of items) {
+    const k = chave(c);
+    if (!mapa.has(k)) mapa.set(k, []);
+    mapa.get(k).push(c);
+  }
+  const saida = [];
+  for (const lista of mapa.values()) {
+    lista.forEach((c, i) => saida.push({
+      ...c,
+      _pos: lista.length === 1 ? "solo" : i === 0 ? "first" : i === lista.length - 1 ? "last" : "mid",
+      _n: lista.length
+    }));
+  }
+  return saida;
 }
 
 function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJump }) {
@@ -2020,7 +2090,7 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
   const grupos = useMemo(() => {
     const ordem = ["Atrasado", "Pendente", "Pago"];
     return ordem
-      .map(status => ({ status, items: filtrados.filter(c => c.status === status) }))
+      .map(status => ({ status, items: agruparDivididos(filtrados.filter(c => c.status === status)) }))
       .filter(g => g.items.length > 0);
   }, [filtrados]);
 
@@ -2030,7 +2100,9 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
         <h2 style={{ margin: 0, fontFamily: "'Fraunces', serif", fontWeight: 700, fontSize: 25, letterSpacing: -0.4, color: C.ink }}>Custos</h2>
-        <button className="tap" onClick={openNew} style={addBtnStyle}><Plus size={16} /> Novo</button>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button className="tap" onClick={openNew} style={addBtnStyle}><Plus size={16} /> Novo</button>
+        </div>
       </div>
 
       <FilterBar>
@@ -2048,7 +2120,15 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
         // For custos, paying LESS than planned isn't a warning — only spending
         // more than planned is, so the Diferença stays neutral otherwise.
         { icon: totals.diferenca < 0 ? <TrendingDown size={12}/> : <TrendingUp size={12}/>, label: "Diferença", value: fmtBRL(totals.diferenca), tone: totals.diferenca > 0.005 ? "red" : undefined },
-        { icon: <Clock size={12} />, label: "Pago/Pend./Atr.", value: `${totals.pagos}/${totals.pendentes}/${totals.atrasados}` },
+        { icon: <Clock size={12} />, label: "Pago/Pend./Atr.", value: (
+          <span>
+            <span style={{ color: totals.pagos > 0 ? C.emerald : C.faint }}>{totals.pagos}</span>
+            <span style={{ color: C.faint }}>/</span>
+            <span style={{ color: totals.pendentes > 0 ? C.amber : C.faint }}>{totals.pendentes}</span>
+            <span style={{ color: C.faint }}>/</span>
+            <span style={{ color: totals.atrasados > 0 ? C.coral : C.faint }}>{totals.atrasados}</span>
+          </span>
+        ) },
       ]} />
 
       {Object.keys(totals.porFonte).length > 0 && (
@@ -2075,6 +2155,12 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
               ))}
             </div>
           </div>
+        </div>
+      )}
+
+      {filtrados.length > 0 && totals.pendentes === 0 && totals.atrasados === 0 && (
+        <div className="in" style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16, padding: "11px 14px", borderRadius: 14, background: C.emeraldSoft, color: C.emerald, fontSize: 13, fontWeight: 600 }}>
+          <Check size={16} strokeWidth={2.6} /> Tudo em dia — {totals.pagos} {totals.pagos === 1 ? "custo pago" : "custos pagos"}, nada pendente.
         </div>
       )}
 
@@ -2106,15 +2192,28 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
                   {g.items.map((c, i) => (
                     <div key={c.id} className="tap in" onClick={() => openEdit(c)} style={{
                       display: "flex", alignItems: "center", gap: 12, background: C.card,
-                      boxShadow: shadowSm, borderRadius: 14, padding: "14px 14px 14px 15px",
+                      boxShadow: shadowSm, padding: "14px 14px 14px 15px",
+                      borderRadius: c._pos === "first" ? "14px 14px 5px 5px" : c._pos === "mid" ? 5 : c._pos === "last" ? "5px 5px 14px 14px" : 14,
+                      marginTop: c._pos === "mid" || c._pos === "last" ? -5 : 0,
                       cursor: "pointer", position: "relative", animationDelay: `${Math.min(i,6)*30}ms`
                     }}>
                       <div style={{ position: "absolute", left: 0, top: 10, bottom: 10, width: 3, borderRadius: 3, background: accent }} />
                       <Wallet size={16} color={C.faint} style={{ flexShrink: 0 }} />
                       <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontWeight: 700, color: C.ink, fontSize: 15 }}>{c.descricao}</div>
-                        <div style={{ fontSize: 11.5, color: C.muted, marginTop: 2 }}>
-                          Venc. {fmtDate(c.vencimento)}{c.dataPagamento ? ` · Pago ${fmtDate(c.dataPagamento)}` : ""} · {c.fonte}
+                        <div style={{ fontWeight: 700, color: C.ink, fontSize: 15 }}>
+                          {c.descricao}
+                          {c._pos === "first" && (
+                            <span style={{ marginLeft: 8, fontSize: 10, fontWeight: 700, color: C.lavender, background: C.border, borderRadius: 8, padding: "1px 7px", verticalAlign: "middle", whiteSpace: "nowrap" }}>
+                              dividido em {c._n}
+                            </span>
+                          )}
+                        </div>
+                        <div style={{ fontSize: 11.5, color: C.muted, marginTop: 2, display: "flex", alignItems: "center", flexWrap: "wrap", gap: "0 6px" }}>
+                          <span>Venc. {fmtDate(c.vencimento)}{c.dataPagamento ? ` · Pago ${fmtDate(c.dataPagamento)}` : ""} ·</span>
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                            <span style={{ width: 8, height: 8, borderRadius: 3, background: fonteColor(c.fonte), flexShrink: 0 }} />
+                            {c.fonte}
+                          </span>
                         </div>
                       </div>
                       <div style={{ flexShrink: 0, textAlign: "right" }}>
@@ -2139,6 +2238,7 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
           })}
         </div>
       )}
+
 
       {showForm && (
         <Modal
@@ -2322,9 +2422,6 @@ function MonthCard({ nome, pago, saldo, status, pctLiquidado, temDados, atual, f
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 6, marginBottom: 8 }}>
         <span style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
           <span style={{ fontWeight: 700, fontSize: 14, color: C.ink }}>{nome}</span>
-          {atual && (
-            <span style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: 0.4, textTransform: "uppercase", color: C.emerald, background: C.emeraldSoft, borderRadius: 6, padding: "1px 6px" }}>atual</span>
-          )}
         </span>
         {temDados && (quitado
           ? <Check size={15} color={C.emerald} strokeWidth={2.6} style={{ flexShrink: 0 }} />
@@ -2344,7 +2441,9 @@ function MonthCard({ nome, pago, saldo, status, pctLiquidado, temDados, atual, f
               color: saldo < 0 ? C.coral : C.emerald
             }}>{fmtBRL(saldo)}</div>
           </div>
-          {foraContagem && <div style={{ fontSize: 10, color: C.faint, marginTop: 6 }}>fora da contagem</div>}
+          {atual
+            ? <div style={{ fontSize: 10, fontWeight: 700, color: C.emerald, marginTop: 6 }}>mês atual</div>
+            : foraContagem && <div style={{ fontSize: 10, color: C.faint, marginTop: 6 }}>fora da contagem</div>}
         </>
       ) : (
         <div style={{ fontSize: 11.5, color: C.faint, padding: "8px 0" }}>Sem lançamentos</div>
