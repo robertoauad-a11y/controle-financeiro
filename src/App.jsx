@@ -474,9 +474,25 @@ function ProgressBar({ pct, color = C.emerald, trackColor = C.border, height = 8
 
 // Compact chart/list tooltip that shows each series' value, its color dot,
 // and its share of the total — a bit more context than a bare number.
-function RichTooltip({ active, payload, label, total, colorMap }) {
+// `modo` picks what the extra line says: default = each series' share of the total
+// (right for donuts); "saldo" = recebido minus pago; "variacao" = change of Atual vs Anterior.
+function RichTooltip({ active, payload, label, total, colorMap, modo }) {
   if (!active || !payload || !payload.length) return null;
   const sum = total ?? payload.reduce((s, p) => s + (Number(p.value) || 0), 0);
+  const val = (k) => Number((payload.find(p => p.dataKey === k) || {}).value) || 0;
+  const mostrarPct = !modo;
+  let extra = null;
+  if (modo === "saldo") {
+    const s = val("Recebido") - val("Pago");
+    extra = { rotulo: "Saldo do mês", texto: fmtBRL(s), cor: s < 0 ? C.coral : C.emerald };
+  } else if (modo === "variacao") {
+    const ant = val("Anterior"), atu = val("Atual");
+    if (ant > 0) {
+      const pct = ((atu - ant) / ant) * 100;
+      // For costs, going up is the bad direction.
+      extra = { rotulo: "Variação", texto: `${pct > 0 ? "+" : ""}${pct.toFixed(0)}%`, cor: pct > 0 ? C.coral : C.emerald };
+    }
+  }
   return (
     <div style={{ background: C.card, boxShadow: shadowMd, borderRadius: 10, padding: "10px 12px", fontSize: 12.5, minWidth: 150 }}>
       {label != null && label !== "" && (
@@ -487,9 +503,15 @@ function RichTooltip({ active, payload, label, total, colorMap }) {
           <span style={{ width: 8, height: 8, borderRadius: 3, background: (colorMap && colorMap[p.dataKey]) || p.color || p.fill, flexShrink: 0 }} />
           <span style={{ color: C.ink, flex: 1, whiteSpace: "nowrap" }}>{p.name}</span>
           <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: C.ink, fontWeight: 700 }}>{fmtBRL(Number(p.value) || 0)}</span>
-          {sum > 0 && <span style={{ color: C.faint, fontSize: 10.5, minWidth: 30, textAlign: "right" }}>{((Number(p.value) / sum) * 100).toFixed(0)}%</span>}
+          {mostrarPct && sum > 0 && <span style={{ color: C.faint, fontSize: 10.5, minWidth: 30, textAlign: "right" }}>{((Number(p.value) / sum) * 100).toFixed(0)}%</span>}
         </div>
       ))}
+      {extra && (
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, marginTop: 8, paddingTop: 7, borderTop: `1px solid ${C.border}` }}>
+          <span style={{ color: C.muted, fontWeight: 600 }}>{extra.rotulo}</span>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 700, color: extra.cor }}>{extra.texto}</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -1360,6 +1382,15 @@ const fmtAtraso = (dias) => {
   return `Atrasado há ${meses} ${meses === 1 ? "mês" : "meses"}`;
 };
 
+// Days from today to a YYYY-MM-DD date (negative = already past); null when there is no valid date.
+const diasAteVenc = (iso) => {
+  if (!iso) return null;
+  const [y, m, d] = String(iso).split("-").map(Number);
+  if (!y || !m || !d) return null;
+  const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
+  return Math.round((new Date(y, m - 1, d) - hoje) / 86400000);
+};
+
 function AttentionCard({ itens, onNavigate, onConcluirDemanda, title = "Precisa de atenção", limit = 6, emptyText, okWhenEmpty = false }) {
   const [aberto, setAberto] = useState(false);
   if (itens.length === 0) {
@@ -1512,10 +1543,16 @@ function DashboardTab({ custos, receitas, demandas, onNavigate, onConcluirDemand
   const ritmo = useRitmoMes(custos, mesAtual);
 
   const receitasComparativo = useMemo(() => {
-    return receitas.filter(r => r.mes === mesAtual)
-      .map(r => ({ nome: r.descricao, Previsto: Number(r.valorPrevisto || 0), Recebido: Number(r.valorRecebido || 0) }))
-      .sort((a, b) => b.Previsto - a.Previsto)
-      .slice(0, 6);
+    // Grouped by título (like the donut next to it): two "BC" records become one "BC" bar.
+    const map = new Map();
+    receitas.filter(r => r.mes === mesAtual).forEach(r => {
+      const nome = (r.descricao || "Outras").toUpperCase();
+      const g = map.get(nome) || { nome, Previsto: 0, Recebido: 0 };
+      g.Previsto += Number(r.valorPrevisto || 0);
+      g.Recebido += Number(r.valorRecebido || 0);
+      map.set(nome, g);
+    });
+    return [...map.values()].sort((a, b) => b.Previsto - a.Previsto).slice(0, 6);
   }, [receitas, mesAtual]);
 
   const saldosPorMes = useMemo(() => MESES.map((_, idx) => {
@@ -1595,14 +1632,14 @@ function DashboardTab({ custos, receitas, demandas, onNavigate, onConcluirDemand
     const map = {};
     receitas.filter(r => r.mes === mesAtual).forEach(r => {
       const v = Number(r.valorRecebido ?? r.valorPrevisto ?? 0);
-      const key = r.descricao || "Outras";
+      const key = (r.descricao || "Outras").toUpperCase();
       map[key] = (map[key] || 0) + v;
     });
     return Object.entries(map).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
   }, [receitas, mesAtual]);
 
   const catColor = useMemo(() => {
-    const titulos = [...new Set(receitas.filter(r => r.mes === mesAtual).map(r => r.descricao || "Outras"))].sort();
+    const titulos = [...new Set(receitas.filter(r => r.mes === mesAtual).map(r => (r.descricao || "Outras").toUpperCase()))].sort();
     return (name) => PALETTE_IN[Math.max(0, titulos.indexOf(name)) % PALETTE_IN.length];
   }, [receitas, mesAtual]);
 
@@ -1675,7 +1712,7 @@ function DashboardTab({ custos, receitas, demandas, onNavigate, onConcluirDemand
   return (
     <div>
       <AttentionCard itens={atencao} onNavigate={onNavigate} onConcluirDemanda={onConcluirDemanda}
-        emptyText="Tudo em dia — nada atrasado nem vencendo nos próximos 7 dias." okWhenEmpty />
+        emptyText="Nada atrasado nem vencendo nos próximos 7 dias." okWhenEmpty />
 
       <BalanceHero
         saldo={kpis.saldo}
@@ -1808,7 +1845,7 @@ function DashboardTab({ custos, receitas, demandas, onNavigate, onConcluirDemand
                 {porCategoria.map((f, i) => (
                   <div key={f.name} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5 }}>
                     <span style={{ width: 9, height: 9, borderRadius: 3, background: catColor(f.name), flexShrink: 0 }} />
-                    <span style={{ color: C.ink, flex: 1 }}>{f.name}</span>
+                    <span title={f.name} style={{ color: C.ink, flex: 1, minWidth: 0, lineHeight: 1.25, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", wordBreak: "break-word" }}>{f.name}</span>
                     <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: C.muted, fontSize: 12 }}>{fmtBRL(f.value)}</span>
                   </div>
                 ))}
@@ -1832,7 +1869,7 @@ function DashboardTab({ custos, receitas, demandas, onNavigate, onConcluirDemand
                 </defs>
                 <XAxis dataKey="mes" tick={{ fontSize: 11, fill: C.faint }} axisLine={{ stroke: C.border }} tickLine={false} />
                 <YAxis hide />
-                <Tooltip content={<RichTooltip colorMap={{ Pago: "#E8434F", Recebido: "#00B98A" }} />} />
+                <Tooltip content={<RichTooltip modo="saldo" colorMap={{ Pago: "#E8434F", Recebido: "#00B98A" }} />} />
                 <Bar dataKey="Pago" fill="url(#gPago)" radius={[4, 4, 0, 0]} />
                 <Bar dataKey="Recebido" fill="url(#gRecebido)" radius={[4, 4, 0, 0]} />
               </BarChart>
@@ -1881,7 +1918,7 @@ function DashboardTab({ custos, receitas, demandas, onNavigate, onConcluirDemand
                       tick={{ fontSize: 9.5, fill: C.faint }} axisLine={{ stroke: C.border }} tickLine={false}
                       tickFormatter={(v) => v.replace("Conta ", "").replace("Débito Automático", "Déb. Auto.")} />
                     <YAxis hide />
-                    <Tooltip content={<RichTooltip colorMap={{ Anterior: "#5C6485", Atual: "#E8434F" }} />} />
+                    <Tooltip content={<RichTooltip modo="variacao" colorMap={{ Anterior: "#5C6485", Atual: "#E8434F" }} />} />
                     <Bar dataKey="Anterior" fill="#5C6485" radius={[4, 4, 0, 0]} />
                     <Bar dataKey="Atual" fill="url(#gPago)" radius={[4, 4, 0, 0]} />
                   </BarChart>
@@ -1931,7 +1968,7 @@ function DashboardTab({ custos, receitas, demandas, onNavigate, onConcluirDemand
                 <BarChart data={receitasComparativo} barGap={3} margin={{ bottom: 30 }}>
                   <XAxis dataKey="nome" interval={0} angle={-35} textAnchor="end" height={60}
                     tick={{ fontSize: 9, fill: C.faint }} axisLine={{ stroke: C.border }} tickLine={false}
-                    tickFormatter={(v) => v.length > 8 ? v.slice(0, 8) + "…" : v} />
+                    tickFormatter={(v) => v.length > 11 ? v.slice(0, 11) + "…" : v} />
                   <YAxis hide />
                   <Tooltip formatter={(v) => fmtBRL(v)} contentStyle={{ borderRadius: 10, border: "none", background: C.card, boxShadow: shadowMd, fontSize: 12.5, color: C.ink }} itemStyle={{ color: C.ink }} labelStyle={{ color: C.muted }} />
                   <Bar dataKey="Previsto" fill="#5C6485" radius={[4, 4, 0, 0]} />
@@ -1989,8 +2026,8 @@ function CardList({ rows, onRemove, onEdit, empty, render }) {
 }
 
 // Costs paid across several fontes are stored as one record per fonte with the same
-// descrição. Inside a status group they are kept side by side (first-appearance order)
-// and tagged so the list can draw them as one connected block.
+// descrição. Inside a status group they are gathered into one block (first-appearance
+// order) so the list can draw an outline around them. Single costs stay as they are.
 function agruparDivididos(items) {
   const chave = (c) => `${(c.descricao || "").trim().toLowerCase()}|${c.mes}`;
   const mapa = new Map();
@@ -1999,15 +2036,10 @@ function agruparDivididos(items) {
     if (!mapa.has(k)) mapa.set(k, []);
     mapa.get(k).push(c);
   }
-  const saida = [];
-  for (const lista of mapa.values()) {
-    lista.forEach((c, i) => saida.push({
-      ...c,
-      _pos: lista.length === 1 ? "solo" : i === 0 ? "first" : i === lista.length - 1 ? "last" : "mid",
-      _n: lista.length
-    }));
-  }
-  return saida;
+  return [...mapa.entries()].map(([k, lista]) => ({
+    key: k, itens: lista, dividido: lista.length > 1,
+    total: lista.reduce((s, c) => s + Number(c.valorPago ?? c.valorPrevisto ?? 0), 0)
+  }));
 }
 
 function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJump }) {
@@ -2090,11 +2122,64 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
   const grupos = useMemo(() => {
     const ordem = ["Atrasado", "Pendente", "Pago"];
     return ordem
-      .map(status => ({ status, items: agruparDivididos(filtrados.filter(c => c.status === status)) }))
+      .map(status => {
+        const items = filtrados.filter(c => c.status === status);
+        return { status, items, blocos: agruparDivididos(items) };
+      })
       .filter(g => g.items.length > 0);
   }, [filtrados]);
 
   const GROUP_LABEL = { "Atrasado": "Atrasados", "Pendente": "A pagar", "Pago": "Pagos" };
+
+  // One cost row. `embutido` = drawn inside the outline of a split cost (flatter, no own shadow).
+  const renderLinhaCusto = (c, i, accent, embutido) => (
+    <div key={c.id} className="tap in" onClick={() => openEdit(c)} style={{
+      display: "flex", alignItems: "center", gap: 12, background: C.card,
+      boxShadow: embutido ? "none" : shadowSm, padding: "14px 14px 14px 15px",
+      borderRadius: embutido ? 13 : 14,
+      cursor: "pointer", position: "relative", animationDelay: `${Math.min(i,6)*30}ms`
+    }}>
+      <div style={{ position: "absolute", left: 0, top: 10, bottom: 10, width: 3, borderRadius: 3, background: accent }} />
+      <Wallet size={16} color={C.faint} style={{ flexShrink: 0 }} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontWeight: 700, color: C.ink, fontSize: 15 }}>
+          {c.descricao}
+        </div>
+        <div style={{ fontSize: 11.5, color: C.muted, marginTop: 2, display: "flex", alignItems: "center", flexWrap: "wrap", gap: "0 6px" }}>
+          <span>Venc. {fmtDate(c.vencimento)}{c.dataPagamento ? ` · Pago ${fmtDate(c.dataPagamento)}` : ""} ·</span>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+            <span style={{ width: 8, height: 8, borderRadius: 3, background: fonteColor(c.fonte), flexShrink: 0 }} />
+            {c.fonte}
+          </span>
+        </div>
+        {c.status !== "Pago" && (() => {
+          const d = diasAteVenc(c.vencimento);
+          if (d === null || d > 7) return null;
+          const atrasado = d < 0;
+          return (
+            <div style={{ fontSize: 11, fontWeight: 700, marginTop: 3, color: atrasado ? C.coral : C.amber }}>
+              {atrasado ? fmtAtraso(-d) : d === 0 ? "Vence hoje" : `Vence em ${d} ${d === 1 ? "dia" : "dias"}`}
+            </div>
+          );
+        })()}
+      </div>
+      <div style={{ flexShrink: 0, textAlign: "right" }}>
+        <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 700, fontSize: 17, color: C.ink }}>
+          {fmtBRL(c.valorPago ?? c.valorPrevisto)}
+        </div>
+        {c.valorPago != null && Math.abs(Number(c.valorPago) - Number(c.valorPrevisto || 0)) > 0.005 && (
+          <div style={{ fontSize: 10.5, color: C.faint, marginTop: 1 }}>previsto {fmtBRL(c.valorPrevisto)}</div>
+        )}
+      </div>
+      <button onClick={(e) => { e.stopPropagation(); if (window.confirm("Remover este custo?")) onRemove(c.id); }} title="Remover" style={{
+        border: "none", background: "transparent", color: C.faint, cursor: "pointer",
+        padding: 4, display: "flex", alignItems: "center", flexShrink: 0
+    }}>
+        <Trash2 size={15} />
+      </button>
+                      </div>
+  );
+
 
   return (
     <div>
@@ -2160,7 +2245,7 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
 
       {filtrados.length > 0 && totals.pendentes === 0 && totals.atrasados === 0 && (
         <div className="in" style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16, padding: "11px 14px", borderRadius: 14, background: C.emeraldSoft, color: C.emerald, fontSize: 13, fontWeight: 600 }}>
-          <Check size={16} strokeWidth={2.6} /> Tudo em dia — {totals.pagos} {totals.pagos === 1 ? "custo pago" : "custos pagos"}, nada pendente.
+          <Check size={16} strokeWidth={2.6} /> {totals.pagos === 1 ? "O único custo lançado está pago." : `Todos os ${totals.pagos} custos lançados estão pagos.`}
         </div>
       )}
 
@@ -2189,49 +2274,22 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
                   <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: C.muted }}>{fmtBRL(totalGrupo)}</span>
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                  {g.items.map((c, i) => (
-                    <div key={c.id} className="tap in" onClick={() => openEdit(c)} style={{
-                      display: "flex", alignItems: "center", gap: 12, background: C.card,
-                      boxShadow: shadowSm, padding: "14px 14px 14px 15px",
-                      borderRadius: c._pos === "first" ? "14px 14px 5px 5px" : c._pos === "mid" ? 5 : c._pos === "last" ? "5px 5px 14px 14px" : 14,
-                      marginTop: c._pos === "mid" || c._pos === "last" ? -5 : 0,
-                      cursor: "pointer", position: "relative", animationDelay: `${Math.min(i,6)*30}ms`
-                    }}>
-                      <div style={{ position: "absolute", left: 0, top: 10, bottom: 10, width: 3, borderRadius: 3, background: accent }} />
-                      <Wallet size={16} color={C.faint} style={{ flexShrink: 0 }} />
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontWeight: 700, color: C.ink, fontSize: 15 }}>
-                          {c.descricao}
-                          {c._pos === "first" && (
-                            <span style={{ marginLeft: 8, fontSize: 10, fontWeight: 700, color: C.lavender, background: C.border, borderRadius: 8, padding: "1px 7px", verticalAlign: "middle", whiteSpace: "nowrap" }}>
-                              dividido em {c._n}
-                            </span>
-                          )}
-                        </div>
-                        <div style={{ fontSize: 11.5, color: C.muted, marginTop: 2, display: "flex", alignItems: "center", flexWrap: "wrap", gap: "0 6px" }}>
-                          <span>Venc. {fmtDate(c.vencimento)}{c.dataPagamento ? ` · Pago ${fmtDate(c.dataPagamento)}` : ""} ·</span>
-                          <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
-                            <span style={{ width: 8, height: 8, borderRadius: 3, background: fonteColor(c.fonte), flexShrink: 0 }} />
-                            {c.fonte}
-                          </span>
-                        </div>
-                      </div>
-                      <div style={{ flexShrink: 0, textAlign: "right" }}>
-                        <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 700, fontSize: 17, color: C.ink }}>
-                          {fmtBRL(c.valorPago ?? c.valorPrevisto)}
-                        </div>
-                        {c.valorPago != null && Math.abs(Number(c.valorPago) - Number(c.valorPrevisto || 0)) > 0.005 && (
-                          <div style={{ fontSize: 10.5, color: C.faint, marginTop: 1 }}>previsto {fmtBRL(c.valorPrevisto)}</div>
-                        )}
-                      </div>
-                      <button onClick={(e) => { e.stopPropagation(); if (window.confirm("Remover este custo?")) onRemove(c.id); }} title="Remover" style={{
-                        border: "none", background: "transparent", color: C.faint, cursor: "pointer",
-                        padding: 4, display: "flex", alignItems: "center", flexShrink: 0
+                  {g.blocos.map((b, bi) => {
+                    const linhas = b.itens.map((c, i) => renderLinhaCusto(c, bi + i, accent, b.dividido));
+                    if (!b.dividido) return linhas;
+                    return (
+                      <div key={b.key} className="in" style={{
+                        border: `1px solid ${C.lavender}55`, background: "rgba(154,165,209,0.05)", borderRadius: 18,
+                        padding: 7, display: "flex", flexDirection: "column", gap: 6
                       }}>
-                        <Trash2 size={15} />
-                      </button>
-                    </div>
-                  ))}
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "3px 9px 1px", fontSize: 10.5, fontWeight: 700, letterSpacing: 0.4, textTransform: "uppercase", color: C.lavender }}>
+                          <span>Dividido em {b.itens.length} fontes</span>
+                          <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: C.muted, letterSpacing: 0 }}>{fmtBRL(b.total)}</span>
+                        </div>
+                        {linhas}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             );
@@ -2311,6 +2369,40 @@ function ReceitasTab({ receitas, onAdd, onRemove, onUpdate }) {
     setShowForm(true);
   };
 
+  // Same two-block layout as Custos: what is still to come first, then what already came in.
+  const gruposRec = useMemo(() => [
+    { chave: "aberto", rotulo: "A receber", accent: C.amber, items: filtradas.filter(r => r.status !== "Recebido") },
+    { chave: "recebido", rotulo: "Recebidas", accent: C.emerald, items: filtradas.filter(r => r.status === "Recebido") },
+  ].filter(g => g.items.length > 0), [filtradas]);
+
+  const renderLinhaReceita = (r) => (
+    <>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontWeight: 700, color: C.ink, fontSize: 15, textTransform: "uppercase" }}>{r.descricao}</div>
+        <div style={{ fontSize: 11.5, color: C.muted, marginTop: 2, display: "flex", alignItems: "center", flexWrap: "wrap", gap: "0 6px" }}>
+          <span>
+            {r.status === "Pendente" ? "Previsto para" : "Recebido"} {fmtDate(r.dataRecebimento)}{r.categoria ? ` · ${r.categoria}` : ""}{r.contaDestino ? " ·" : ""}
+          </span>
+          {r.contaDestino && (
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+              <span style={{ width: 8, height: 8, borderRadius: 3, background: fonteColor(r.contaDestino), flexShrink: 0 }} />
+              {r.contaDestino}
+            </span>
+          )}
+        </div>
+      </div>
+      <div style={{ textAlign: "right", minWidth: 92 }}>
+        <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 700, fontSize: 14.5, color: C.ink }}>
+          {fmtBRL(r.valorRecebido ?? r.valorPrevisto)}
+        </div>
+        {r.valorRecebido != null && Math.abs(Number(r.valorRecebido) - Number(r.valorPrevisto || 0)) > 0.005 && (
+          <div style={{ fontSize: 10.5, color: C.faint, marginTop: 1 }}>previsto {fmtBRL(r.valorPrevisto)}</div>
+        )}
+        <div style={{ marginTop: 3 }}><StatusPill status={r.status} /></div>
+      </div>
+    </>
+  );
+
   const submit = async (e) => {
     e.preventDefault();
     if (saving) return;
@@ -2353,34 +2445,36 @@ function ReceitasTab({ receitas, onAdd, onRemove, onUpdate }) {
         { icon: <PiggyBank size={12} />, label: "Previsto", value: fmtBRL(totals.totalPrevisto) },
         { icon: <Check size={12} />, label: "Recebido", value: fmtBRL(totals.totalRecebido) },
         { icon: totals.diferenca < 0 ? <TrendingDown size={12}/> : <TrendingUp size={12}/>, label: "Diferença", value: fmtBRL(totals.diferenca), tone: totals.diferenca < 0 ? "red" : "green" },
-        { icon: <Clock size={12} />, label: "Receb./Pend.", value: `${totals.recebidas}/${totals.pendentes}` },
+        { icon: <Clock size={12} />, label: "Receb./Pend.", value: (
+          <span>
+            <span style={{ color: totals.recebidas > 0 ? C.emerald : C.faint }}>{totals.recebidas}</span>
+            <span style={{ color: C.faint }}>/</span>
+            <span style={{ color: totals.pendentes > 0 ? C.amber : C.faint }}>{totals.pendentes}</span>
+          </span>
+        ) },
       ]} />
 
-      <CardList
-        empty="Nenhuma receita lançada neste mês."
-        rows={filtradas}
-        onRemove={onRemove}
-        onEdit={openEdit}
-        render={(r) => (
-          <>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontWeight: 700, color: C.ink, fontSize: 15, textTransform: "uppercase" }}>{r.descricao}</div>
-              <div style={{ fontSize: 11.5, color: C.muted, marginTop: 2 }}>
-                Recebido {fmtDate(r.dataRecebimento)}{r.categoria ? ` · ${r.categoria}` : ""}{r.contaDestino ? ` · ${r.contaDestino}` : ""}
+      {gruposRec.length === 0 ? (
+        <CardList empty="Nenhuma receita lançada neste mês." rows={[]} onRemove={onRemove} onEdit={openEdit} render={renderLinhaReceita} />
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 22 }}>
+          {gruposRec.map(g => (
+            <div key={g.chave}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, padding: "0 2px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                  <span style={{ width: 7, height: 7, borderRadius: "50%", background: g.accent }} />
+                  <span style={{ fontWeight: 700, fontSize: 12.5, color: C.ink, textTransform: "uppercase", letterSpacing: 0.5 }}>{g.rotulo}</span>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: C.muted, background: C.border, borderRadius: 10, padding: "1px 7px" }}>{g.items.length}</span>
+                </div>
+                <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: C.muted }}>
+                  {fmtBRL(g.items.reduce((s, r) => s + Number(r.valorRecebido ?? r.valorPrevisto ?? 0), 0))}
+                </span>
               </div>
+              <CardList empty="" rows={g.items} onRemove={onRemove} onEdit={openEdit} render={renderLinhaReceita} />
             </div>
-            <div style={{ textAlign: "right", minWidth: 92 }}>
-              <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 700, fontSize: 14.5, color: C.ink }}>
-                {fmtBRL(r.valorRecebido ?? r.valorPrevisto)}
-              </div>
-              {r.valorRecebido != null && Math.abs(Number(r.valorRecebido) - Number(r.valorPrevisto || 0)) > 0.005 && (
-                <div style={{ fontSize: 10.5, color: C.faint, marginTop: 1 }}>previsto {fmtBRL(r.valorPrevisto)}</div>
-              )}
-              <div style={{ marginTop: 3 }}><StatusPill status={r.status} /></div>
-            </div>
-          </>
-        )}
-      />
+          ))}
+        </div>
+      )}
 
       {showForm && (
         <Modal
