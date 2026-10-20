@@ -8,7 +8,7 @@ import * as XLSX from "xlsx";
 import { auth, db } from "./firebase.js";
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from "firebase/auth";
 import { collection, doc, addDoc, updateDoc, deleteDoc, onSnapshot, writeBatch } from "firebase/firestore";
-import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, ReferenceLine, AreaChart, Area } from "recharts";
+import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, ReferenceLine, AreaChart, Area, LabelList } from "recharts";
 
 /* ------------------------------------------------------------------ */
 /*  Firestore collections — one document per record. Never write an   */
@@ -106,7 +106,7 @@ function parseQuickEntry(rawText) {
       text = text.replace(new RegExp(diaMatch[0].replace(/\s+/g, "\\s+"), "i"), " ");
     }
   }
-  if (!dataStr) dataStr = new Date().toISOString().slice(0, 10);
+  if (!dataStr) dataStr = localISO();
 
   // "salário" alone suggests income ("recebi meu salário"), but "conta
   // salário" is just the fonte name — strip recognized fonte phrases first so
@@ -200,8 +200,11 @@ const matchDemanda = (descricao, demandas) => {
   }
   return null;
 };
-const todayISO = () => new Date().toISOString().slice(0,10);
-const currentMonth = () => new Date().toISOString().slice(0,7);
+// Local calendar date (not UTC): in UTC-4 the UTC date flips to "tomorrow" at 20:00,
+// which would stamp new records with the wrong day and the wrong month on the last evening of a month.
+const localISO = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const todayISO = () => localISO();
+const currentMonth = () => localISO().slice(0, 7);
 const parseValorBR = (raw) => {
   if (raw === null || raw === undefined || raw === "") return 0;
   let s = String(raw).trim().replace(/[^\d.,-]/g, "");
@@ -516,9 +519,9 @@ function RichTooltip({ active, payload, label, total, colorMap, modo }) {
   );
 }
 
-function Field({ label, children }) {
+function Field({ label, children, span }) {
   return (
-    <label style={{ display: "flex", flexDirection: "column", gap: 5, fontSize: 13 }}>
+    <label style={{ display: "flex", flexDirection: "column", gap: 5, fontSize: 13, ...(span ? { gridColumn: `span ${span}` } : {}) }}>
       <span style={{ color: C.muted, fontWeight: 600, letterSpacing: 0.2 }}>{label}</span>
       {children}
     </label>
@@ -531,8 +534,12 @@ const inputStyle = {
   color: C.ink, outline: "none",
 };
 
+// Native date/month inputs render taller than text inputs on iPad Safari, which
+// threw the form rows and the filter labels out of line; pin them to the same height.
+const dateInputFix = { height: 46, boxSizing: "border-box", WebkitAppearance: "none", appearance: "none", minWidth: 0 };
 function TextInput(props) {
-  return <input {...props} style={{ ...inputStyle, ...(props.style||{}) }} />;
+  const ehData = props.type === "date" || props.type === "month";
+  return <input {...props} style={{ ...inputStyle, ...(ehData ? dateInputFix : {}), ...(props.style||{}) }} />;
 }
 function TextArea({ rows = 3, ...props }) {
   return (
@@ -777,16 +784,16 @@ function QuickAddFab({ onAddCusto, onAddReceita, demandas = [], onResolveDemanda
   return (
     <>
       <button className="tap" onClick={() => setOpen(true)} title="Lançamento rápido" aria-hidden={escondido} tabIndex={escondido ? -1 : 0} style={{
-        position: "fixed", right: 18, bottom: "calc(92px + env(safe-area-inset-bottom))", zIndex: 42,
-        width: 56, height: 56, borderRadius: 28, border: "none",
+        position: "fixed", right: 8, bottom: "calc(88px + env(safe-area-inset-bottom))", zIndex: 42,
+        width: 42, height: 42, borderRadius: 21, border: "none",
         background: C.emerald, color: "#0A0E1C", cursor: "pointer",
         display: "flex", alignItems: "center", justifyContent: "center",
-        boxShadow: "0 10px 26px rgba(0,224,168,0.45)",
+        boxShadow: "0 6px 16px rgba(0,224,168,0.28)",
         transform: escondido ? "translateY(110px) scale(0.9)" : "translateY(0) scale(1)",
-        opacity: escondido ? 0 : 1, pointerEvents: escondido ? "none" : "auto",
+        opacity: escondido ? 0 : 0.82, pointerEvents: escondido ? "none" : "auto",
         transition: "transform .25s ease, opacity .2s ease"
       }}>
-        <Plus size={26} strokeWidth={2.6} />
+        <Plus size={21} strokeWidth={2.6} />
       </button>
 
       {open && step === "input" && (
@@ -1038,7 +1045,10 @@ export default function App() {
     try { await deleteDoc(doc(db, "demandas", id)); setSaveError(false); } catch (e) { setSaveError(true); }
   };
   const updateDemandaStatus = async (id, status) => {
-    try { await updateDoc(doc(db, "demandas", id), { status }); setSaveError(false); } catch (e) { setSaveError(true); }
+    // Remember the day a demanda was concluded (only when the person moves it there);
+    // moving it back out clears the date.
+    const extra = status === "Concluída" ? { concluidaEm: todayISO() } : { concluidaEm: "" };
+    try { await updateDoc(doc(db, "demandas", id), { status, ...extra }); setSaveError(false); } catch (e) { setSaveError(true); }
   };
   const updateDemanda = async (id, d) => {
     try { await updateDoc(doc(db, "demandas", id), d); setSaveError(false); } catch (e) { setSaveError(true); }
@@ -1098,10 +1108,10 @@ export default function App() {
   // Personal single-user app: the e-mail prefix ("robertoauad") read badly as a
   // greeting, so the name is set directly.
   const greeting = "Roberto";
-  const hojeLabel = `${new Date().getDate()} de ${MESES[new Date().getMonth()]}`;
+  const hojeLabel = `${new Date().getDate()} de ${MESES[new Date().getMonth()].toLowerCase()}`;
 
   return (
-    <div style={{ minHeight: "100vh", background: C.page, fontFamily: "'Inter', sans-serif", paddingBottom: 92 }}>
+    <div style={{ minHeight: "100vh", background: C.page, fontFamily: "'Inter', sans-serif", paddingBottom: 150 }}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Fraunces:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@500;600;700&display=swap');
         * { box-sizing: border-box; }
@@ -1226,8 +1236,30 @@ const menuItemStyle = {
 
 const MESES_ABR = MESES.map(m => m.slice(0, 3));
 
-function BalanceHero({ saldo, trendAtual, trendAnterior, mesLabel, hidden, onToggle, saldosPorMes, porFonte, expanded, onToggleExpanded }) {
-  const maxAbs = Math.max(1, ...saldosPorMes.map(s => Math.abs(s)));
+// Straight (not angled) axis label that wraps onto up to 3 short lines, so long
+// names like "ALUGUEL VIA IPIRANGA" stay readable and distinguishable.
+function WrapTick({ x, y, payload, fmt, max = 11 }) {
+  const texto = fmt ? fmt(String(payload.value)) : String(payload.value);
+  const linhas = [];
+  let atual = "";
+  texto.split(/\s+/).filter(Boolean).forEach(w => {
+    if (atual && (atual + " " + w).length > max) { linhas.push(atual); atual = w; }
+    else atual = atual ? atual + " " + w : w;
+  });
+  if (atual) linhas.push(atual);
+  const vis = linhas.slice(0, 3);
+  if (linhas.length > 3) vis[2] = vis[2].slice(0, max - 1) + "…";
+  return (
+    <text x={x} y={y + 10} textAnchor="middle" fontSize={9.5} fill={C.faint}>
+      {vis.map((l, i) => <tspan key={i} x={x} dy={i === 0 ? 0 : 11}>{l}</tspan>)}
+    </text>
+  );
+}
+
+function BalanceHero({ saldo, trendAtual, trendAnterior, mesLabel, hidden, onToggle, saldosPorMes, porFonte, expanded, onToggleExpanded, inicioIdx = 0 }) {
+  // Scale only by the months that count (from "contar a partir de" on), so older
+  // months with incomplete history can't flatten the ones that matter.
+  const maxAbs = Math.max(1, ...saldosPorMes.filter((_, i) => i >= inicioIdx).map(s => Math.abs(s)));
   // Trend compares "recebido - pago até o mesmo dia do mês" on both sides (not
   // the full previous month — see the trend calc in DashboardTab for why) and,
   // within that, % only makes intuitive sense against a positive base: "466%"
@@ -1273,9 +1305,8 @@ function BalanceHero({ saldo, trendAtual, trendAnterior, mesLabel, hidden, onTog
           <button className="tap" onClick={onToggleExpanded} aria-label="Ver saldo por fonte" style={{
             width: 38, height: 38, borderRadius: 12, border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.06)",
             color: C.lavender, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
-            transform: expanded ? "rotate(45deg)" : "none", transition: "transform .2s ease"
           }}>
-            <Plus size={16} />
+            <Plus size={16} style={{ transform: expanded ? "rotate(45deg)" : "none", transition: "transform .2s ease" }} />
           </button>
           <button className="tap" onClick={onToggle} style={{
             width: 38, height: 38, borderRadius: 12, border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.06)",
@@ -1287,10 +1318,11 @@ function BalanceHero({ saldo, trendAtual, trendAnterior, mesLabel, hidden, onTog
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 5, height: 56, marginTop: 26, position: "relative" }}>
         {saldosPorMes.map((s, i) => {
-          const h = s === 0 ? 2 : Math.max(3, (Math.abs(s) / maxAbs) * 24);
+          const fora = i < inicioIdx;
+          const h = s === 0 ? 2 : fora ? Math.min(6, Math.max(3, (Math.abs(s) / maxAbs) * 24)) : Math.max(3, (Math.abs(s) / maxAbs) * 24);
           const positive = s >= 0;
           return (
-            <div key={i} style={{ display: "flex", flexDirection: "column", alignItems: "center", flex: 1, gap: 3 }}>
+            <div key={i} style={{ display: "flex", flexDirection: "column", alignItems: "center", flex: 1, gap: 3, opacity: fora ? 0.35 : 1 }}>
               <div style={{ height: 24, display: "flex", alignItems: "flex-end" }}>
                 <div style={{ width: "100%", minWidth: 4, borderRadius: "3px 3px 0 0", height: positive ? h : 2, background: positive ? "#4FE8BE" : "rgba(255,255,255,0.12)" }} />
               </div>
@@ -1391,7 +1423,7 @@ const diasAteVenc = (iso) => {
   return Math.round((new Date(y, m - 1, d) - hoje) / 86400000);
 };
 
-function AttentionCard({ itens, onNavigate, onConcluirDemanda, title = "Precisa de atenção", limit = 6, emptyText, okWhenEmpty = false }) {
+function AttentionCard({ itens, onNavigate, onConcluirDemanda, title = "Precisa de atenção", limit = 6, emptyText, okWhenEmpty = false, neutro = false }) {
   const [aberto, setAberto] = useState(false);
   if (itens.length === 0) {
     // Cards with an emptyText stay on screen with a calm message; the others simply disappear.
@@ -1411,9 +1443,9 @@ function AttentionCard({ itens, onNavigate, onConcluirDemanda, title = "Precisa 
   return (
     <div className="in" style={{ background: C.card, boxShadow: shadowSm, borderRadius: 18, padding: "16px 18px", marginBottom: 20 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-        <AlertCircle size={16} color={C.coral} />
+        {neutro ? <Calendar size={16} color={C.lavender} /> : <AlertCircle size={16} color={C.coral} />}
         <span style={{ fontWeight: 700, fontSize: 13, color: C.ink, textTransform: "uppercase", letterSpacing: 0.4 }}>{title}</span>
-        <span style={{ fontSize: 11, fontWeight: 700, color: C.coral, background: C.coralSoft, borderRadius: 10, padding: "1px 8px" }}>
+        <span style={{ fontSize: 11, fontWeight: 700, color: neutro ? C.muted : C.coral, background: neutro ? C.border : C.coralSoft, borderRadius: 10, padding: "1px 8px" }}>
           {itens.length}
         </span>
       </div>
@@ -1722,6 +1754,7 @@ function DashboardTab({ custos, receitas, demandas, onNavigate, onConcluirDemand
         hidden={hidden}
         onToggle={() => setHidden(h => !h)}
         saldosPorMes={saldosPorMes}
+        inicioIdx={inicioIdx}
         porFonte={saldoPorFonte}
         expanded={saldoAberto}
         onToggleExpanded={() => setSaldoAberto(a => !a)}
@@ -1855,7 +1888,13 @@ function DashboardTab({ custos, receitas, demandas, onNavigate, onConcluirDemand
         </div>
 
         <div className="in" style={{ background: C.card, boxShadow: shadowSm, borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "160ms", display: "flex", flexDirection: "column" }}>
-          <div style={{ fontWeight: 700, fontSize: 13.5, color: C.ink, marginBottom: 10 }}>Pago x Recebido — últimos 6 meses</div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+            <span style={{ fontWeight: 700, fontSize: 13.5, color: C.ink }}>Pago x Recebido — últimos 6 meses</span>
+            <span style={{ display: "flex", gap: 10, fontSize: 11, color: C.muted, fontWeight: 600 }}>
+              <span style={{ display: "flex", alignItems: "center", gap: 4 }}><span style={{ width: 8, height: 8, borderRadius: 2, background: "#E8434F" }} />Pago</span>
+              <span style={{ display: "flex", alignItems: "center", gap: 4 }}><span style={{ width: 8, height: 8, borderRadius: 2, background: "#00B98A" }} />Recebido</span>
+            </span>
+          </div>
           <div style={{ width: "100%", flex: 1, minHeight: 170 }}>
             <ResponsiveContainer width="100%" height="100%" minHeight={170}>
               <BarChart data={tendencia} barGap={4}>
@@ -1913,10 +1952,9 @@ function DashboardTab({ custos, receitas, demandas, onNavigate, onConcluirDemand
             <>
               <div style={{ width: "100%", flex: 1, minHeight: 200 }}>
                 <ResponsiveContainer width="100%" height="100%" minHeight={200}>
-                  <BarChart data={comparativo} barGap={3} margin={{ bottom: 24 }}>
-                    <XAxis dataKey="fonte" interval={0} angle={-35} textAnchor="end" height={50}
-                      tick={{ fontSize: 9.5, fill: C.faint }} axisLine={{ stroke: C.border }} tickLine={false}
-                      tickFormatter={(v) => v.replace("Conta ", "").replace("Débito Automático", "Déb. Auto.")} />
+                  <BarChart data={comparativo} barGap={3} margin={{ bottom: 4 }}>
+                    <XAxis dataKey="fonte" interval={0} height={44}
+                      tick={<WrapTick fmt={(v) => v.replace("Débito Automático", "Déb. Automático")} />} axisLine={{ stroke: C.border }} tickLine={false} />
                     <YAxis hide />
                     <Tooltip content={<RichTooltip modo="variacao" colorMap={{ Anterior: "#5C6485", Atual: "#E8434F" }} />} />
                     <Bar dataKey="Anterior" fill="#5C6485" radius={[4, 4, 0, 0]} />
@@ -1942,7 +1980,7 @@ function DashboardTab({ custos, receitas, demandas, onNavigate, onConcluirDemand
           <div style={{ fontSize: 11.5, color: C.faint, marginBottom: 10 }}>Soma dos saldos mês a mês desde {inicioIdx === 0 ? "janeiro" : MESES[inicioIdx].toLowerCase()}</div>
           <div style={{ width: "100%", flex: 1, minHeight: 170 }}>
             <ResponsiveContainer width="100%" height="100%" minHeight={170}>
-              <AreaChart data={acumulado}>
+              <AreaChart data={acumulado.slice(inicioIdx)} margin={{ top: 8, right: 10, left: 10 }}>
                 <defs>
                   <linearGradient id="gAcum" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="0%" stopColor={acumColor} stopOpacity={0.45} /><stop offset="100%" stopColor={acumColor} stopOpacity={0.02} />
@@ -1952,7 +1990,7 @@ function DashboardTab({ custos, receitas, demandas, onNavigate, onConcluirDemand
                 <YAxis hide />
                 <ReferenceLine y={0} stroke={C.border} />
                 <Tooltip formatter={(v) => fmtBRL(v)} contentStyle={{ borderRadius: 10, border: "none", background: C.card, boxShadow: shadowMd, fontSize: 12.5, color: C.ink }} itemStyle={{ color: C.ink }} labelStyle={{ color: C.muted }} />
-                <Area type="monotone" dataKey="Acumulado" stroke={acumColor} strokeWidth={2.5} fill="url(#gAcum)" dot={false} connectNulls={false} />
+                <Area type="monotone" dataKey="Acumulado" stroke={acumColor} strokeWidth={2.5} fill="url(#gAcum)" dot={{ r: 3.5, fill: acumColor, strokeWidth: 0 }} activeDot={{ r: 5 }} connectNulls={false} />
               </AreaChart>
             </ResponsiveContainer>
           </div>
@@ -1963,12 +2001,11 @@ function DashboardTab({ custos, receitas, demandas, onNavigate, onConcluirDemand
           {receitasComparativo.length === 0 ? (
             <div style={{ color: C.muted, fontSize: 13, padding: "16px 0", textAlign: "center" }}>Sem receitas lançadas neste mês.</div>
           ) : (
-            <div style={{ width: "100%", height: 220 }}>
+            <div style={{ width: "100%", height: 200 }}>
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={receitasComparativo} barGap={3} margin={{ bottom: 30 }}>
-                  <XAxis dataKey="nome" interval={0} angle={-35} textAnchor="end" height={60}
-                    tick={{ fontSize: 9, fill: C.faint }} axisLine={{ stroke: C.border }} tickLine={false}
-                    tickFormatter={(v) => v.length > 11 ? v.slice(0, 11) + "…" : v} />
+                <BarChart data={receitasComparativo} barGap={3} margin={{ bottom: 4 }}>
+                  <XAxis dataKey="nome" interval={0} height={44}
+                    tick={<WrapTick max={receitasComparativo.length > 5 ? 9 : 11} />} axisLine={{ stroke: C.border }} tickLine={false} />
                   <YAxis hide />
                   <Tooltip formatter={(v) => fmtBRL(v)} contentStyle={{ borderRadius: 10, border: "none", background: C.card, boxShadow: shadowMd, fontSize: 12.5, color: C.ink }} itemStyle={{ color: C.ink }} labelStyle={{ color: C.muted }} />
                   <Bar dataKey="Previsto" fill="#5C6485" radius={[4, 4, 0, 0]} />
@@ -1981,7 +2018,7 @@ function DashboardTab({ custos, receitas, demandas, onNavigate, onConcluirDemand
 
         {/* alignSelf: start — a short list must not be stretched to the height of its neighbour */}
         <div style={{ alignSelf: "start" }}>
-          <AttentionCard itens={proximos30} onNavigate={onNavigate} onConcluirDemanda={onConcluirDemanda} title="Próximos vencimentos (30 dias)" limit={8}
+          <AttentionCard itens={proximos30} onNavigate={onNavigate} onConcluirDemanda={onConcluirDemanda} title="Próximos vencimentos (30 dias)" limit={8} neutro
             emptyText={atencao.length > 0 ? "Nenhum outro vencimento nos próximos 30 dias." : "Nenhum vencimento nos próximos 30 dias."} />
         </div>
       </div>
@@ -2015,7 +2052,7 @@ function CardList({ rows, onRemove, onEdit, empty, render }) {
           {render(row)}
           <button onClick={(e) => { e.stopPropagation(); if (window.confirm("Remover este item?")) onRemove(row.id); }} title="Remover" style={{
             border: "none", background: "transparent", color: C.faint, cursor: "pointer",
-            padding: 4, display: "flex", alignItems: "center", flexShrink: 0
+            padding: 4, display: "flex", alignItems: "center", flexShrink: 0, marginRight: 12
           }}>
             <Trash2 size={16} />
           </button>
@@ -2069,7 +2106,8 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
     filtrados.forEach(c => { porFonte[c.fonte] = (porFonte[c.fonte]||0) + Number(c.valorPago||0); });
     // Largest fonte first — same ordering as the dashboard's "Custos por fonte".
     const porFonteOrdenado = Object.fromEntries(Object.entries(porFonte).sort((a, b) => b[1] - a[1]));
-    return { totalPrevisto, totalPago, diferenca: totalPago-totalPrevisto, pagos, pendentes, atrasados, porFonte: porFonteOrdenado };
+    const faltaPagar = filtrados.filter(c => c.status !== "Pago").reduce((s,c) => s + Number(c.valorPrevisto||0), 0);
+    return { totalPrevisto, totalPago, diferenca: totalPago-totalPrevisto, faltaPagar, pagos, pendentes, atrasados, porFonte: porFonteOrdenado };
   }, [filtrados]);
 
   function blankCusto(mes) {
@@ -2204,7 +2242,11 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
         { icon: <Check size={12} />, label: "Pago", value: fmtBRL(totals.totalPago) },
         // For custos, paying LESS than planned isn't a warning — only spending
         // more than planned is, so the Diferença stays neutral otherwise.
-        { icon: totals.diferenca < 0 ? <TrendingDown size={12}/> : <TrendingUp size={12}/>, label: "Diferença", value: fmtBRL(totals.diferenca), tone: totals.diferenca > 0.005 ? "red" : undefined },
+        (totals.pendentes + totals.atrasados > 0)
+          ? { icon: <Clock size={12}/>, label: "Falta pagar", value: fmtBRL(totals.faltaPagar), tone: totals.atrasados > 0 ? "red" : "gold" }
+          : (filtrados.length > 0 && totals.diferenca < -0.005)
+          ? { icon: <TrendingDown size={12}/>, label: "Economia", value: fmtBRL(-totals.diferenca), tone: "green" }
+          : { icon: totals.diferenca < 0 ? <TrendingDown size={12}/> : <TrendingUp size={12}/>, label: "Diferença", value: fmtBRL(totals.diferenca), tone: totals.diferenca > 0.005 ? "red" : undefined },
         { icon: <Clock size={12} />, label: "Pago/Pend./Atr.", value: (
           <span>
             <span style={{ color: totals.pagos > 0 ? C.emerald : C.faint }}>{totals.pagos}</span>
@@ -2230,7 +2272,7 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
                 </PieChart>
               </ResponsiveContainer>
             </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 5, flex: 1, minWidth: 130 }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 5, flex: "1 1 130px", maxWidth: 380 }}>
               {Object.entries(totals.porFonte).map(([f,v],i) => (
                 <div key={f} style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12 }}>
                   <span style={{ width: 8, height: 8, borderRadius: 3, background: fonteColor(f), flexShrink: 0 }} />
@@ -2315,7 +2357,19 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
             <Field label="Valor Previsto (R$)"><TextInput type="text" inputMode="decimal" placeholder="0,00" required value={form.valorPrevisto} onChange={e=>setForm({...form,valorPrevisto:e.target.value})} /></Field>
             <Field label="Valor Pago (R$)"><TextInput type="text" inputMode="decimal" placeholder="0,00" value={form.valorPago} onChange={e=>setForm({...form,valorPago:e.target.value})} /></Field>
             <Field label="Fonte de Pagamento"><SelectInput options={FONTES} value={form.fonte} onChange={e=>setForm({...form,fonte:e.target.value})} /></Field>
-            <Field label="Status"><SelectInput options={STATUS_CUSTO} value={form.status} onChange={e=>setForm({...form,status:e.target.value})} /></Field>
+            <Field label="Status"><SelectInput options={STATUS_CUSTO} value={form.status} onChange={e => {
+              // Marking a custo as Pago fills, right here in the form (still editable before saving),
+              // the payment date and the paid value when they are empty.
+              const st = e.target.value;
+              setForm(f => {
+                const n = { ...f, status: st };
+                if (st === "Pago") {
+                  if (!f.dataPagamento) n.dataPagamento = todayISO();
+                  if (parseValorBR(f.valorPago) === 0 && f.valorPrevisto !== "") n.valorPago = f.valorPrevisto;
+                }
+                return n;
+              });
+            }} /></Field>
             <Field label="Observações"><TextArea rows={10} style={{gridColumn:"span 2", height: 260}} value={form.obs} onChange={e=>setForm({...form,obs:e.target.value})} /></Field>
           </form>
         </Modal>
@@ -2349,7 +2403,8 @@ function ReceitasTab({ receitas, onAdd, onRemove, onUpdate }) {
     const totalRecebido = filtradas.reduce((s,r) => s + Number(r.valorRecebido||0), 0);
     const recebidas = filtradas.filter(r => r.status === "Recebido").length;
     const pendentes = filtradas.filter(r => r.status !== "Recebido").length;
-    return { totalPrevisto, totalRecebido, diferenca: totalRecebido-totalPrevisto, recebidas, pendentes };
+    const aReceber = filtradas.filter(r => r.status !== "Recebido").reduce((s,r) => s + Number(r.valorPrevisto||0), 0);
+    return { totalPrevisto, totalRecebido, diferenca: totalRecebido-totalPrevisto, aReceber, recebidas, pendentes };
   }, [filtradas]);
 
   function blankReceita(mes) {
@@ -2444,7 +2499,9 @@ function ReceitasTab({ receitas, onAdd, onRemove, onUpdate }) {
       <StatRow stats={[
         { icon: <PiggyBank size={12} />, label: "Previsto", value: fmtBRL(totals.totalPrevisto) },
         { icon: <Check size={12} />, label: "Recebido", value: fmtBRL(totals.totalRecebido) },
-        { icon: totals.diferenca < 0 ? <TrendingDown size={12}/> : <TrendingUp size={12}/>, label: "Diferença", value: fmtBRL(totals.diferenca), tone: totals.diferenca < 0 ? "red" : "green" },
+        totals.pendentes > 0
+          ? { icon: <Clock size={12}/>, label: "A receber", value: fmtBRL(totals.aReceber), tone: "gold" }
+          : { icon: totals.diferenca < 0 ? <TrendingDown size={12}/> : <TrendingUp size={12}/>, label: totals.diferenca < -0.005 ? "Abaixo do previsto" : "Diferença", value: fmtBRL(totals.diferenca), tone: totals.diferenca < 0 ? "red" : "green" },
         { icon: <Clock size={12} />, label: "Receb./Pend.", value: (
           <span>
             <span style={{ color: totals.recebidas > 0 ? C.emerald : C.faint }}>{totals.recebidas}</span>
@@ -2493,7 +2550,15 @@ function ReceitasTab({ receitas, onAdd, onRemove, onUpdate }) {
             <Field label="Valor Previsto (R$)"><TextInput type="text" inputMode="decimal" placeholder="0,00" required value={form.valorPrevisto} onChange={e=>setForm({...form,valorPrevisto:e.target.value})} /></Field>
             <Field label="Valor Recebido (R$)"><TextInput type="text" inputMode="decimal" placeholder="0,00" value={form.valorRecebido} onChange={e=>setForm({...form,valorRecebido:e.target.value})} /></Field>
             <Field label="Conta de Destino"><SelectInput options={FONTES} value={form.contaDestino} onChange={e=>setForm({...form,contaDestino:e.target.value})} /></Field>
-            <Field label="Status"><SelectInput options={STATUS_RECEITA} value={form.status} onChange={e=>setForm({...form,status:e.target.value})} /></Field>
+            <Field label="Status"><SelectInput options={STATUS_RECEITA} value={form.status} onChange={e => {
+              // Marking a receita as Recebido fills the received value from the previsto when it is empty.
+              const st = e.target.value;
+              setForm(f => {
+                const n = { ...f, status: st };
+                if (st === "Recebido" && parseValorBR(f.valorRecebido) === 0 && f.valorPrevisto !== "") n.valorRecebido = f.valorPrevisto;
+                return n;
+              });
+            }} /></Field>
             <Field label="Observações"><TextArea rows={10} style={{gridColumn:"span 2", height: 260}} value={form.obs} onChange={e=>setForm({...form,obs:e.target.value})} /></Field>
           </form>
         </Modal>
@@ -2585,7 +2650,19 @@ function ResumoTab({ custos, receitas, inicioContagem, onChangeInicio }) {
     previsto: acc.previsto + r.totalPrevistoCusto, pago: acc.pago + r.totalPagoCusto, recebido: acc.recebido + r.totalRecebido,
   }), { previsto: 0, pago: 0, recebido: 0 });
 
-  const chartData = rows.map((r, i) => ({ mes: r.mesAbr, Saldo: r.saldo, contado: i >= inicioIdx }));
+  // The chart scale follows only the months that count; older months (outside
+  // "contar a partir de") are clipped to the scale and drawn faded, so they
+  // can't flatten the months that matter. The tooltip still shows the real value.
+  const saldosContados = rows.filter((_, i) => i >= inicioIdx && rows[i].temDados).map(r => r.saldo);
+  const topoC = Math.max(1, ...saldosContados, 0);
+  const baseC = Math.min(0, ...saldosContados);
+  const domMax = topoC * 1.35;
+  const domMin = Math.min(baseC * 1.5, -topoC * 0.3);
+  const chartData = rows.map((r, i) => ({
+    mes: r.mesAbr, Saldo: r.saldo, contado: i >= inicioIdx, temDados: r.temDados,
+    Plot: Math.max(domMin, Math.min(domMax, r.saldo))
+  }));
+  const vazios = rows.filter(r => !r.temDados && r.mesKey !== currentMonth());
 
   return (
     <div>
@@ -2615,13 +2692,22 @@ function ResumoTab({ custos, receitas, inicioContagem, onChangeInicio }) {
         <div style={{ fontWeight: 700, fontSize: 13.5, color: C.ink, marginBottom: 10 }}>Saldo mês a mês</div>
         <div style={{ width: "100%", height: 180 }}>
           <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={chartData}>
+            <BarChart data={chartData} margin={{ top: 14, bottom: 4 }}>
               <XAxis dataKey="mes" tick={{ fontSize: 11, fill: C.faint }} axisLine={{ stroke: C.border }} tickLine={false} />
-              <YAxis hide />
+              <YAxis hide domain={[domMin, domMax]} />
               <ReferenceLine y={0} stroke={C.border} />
-              <Tooltip formatter={(v) => fmtBRL(v)} contentStyle={{ borderRadius: 10, border: "none", background: C.card, boxShadow: shadowMd, fontSize: 12.5, color: C.ink }} itemStyle={{ color: C.ink }} labelStyle={{ color: C.muted }} />
-              <Bar dataKey="Saldo" radius={[4, 4, 4, 4]}>
+              <Tooltip formatter={(v, n, item) => [fmtBRL(item.payload.Saldo), "Saldo"]} contentStyle={{ borderRadius: 10, border: "none", background: C.card, boxShadow: shadowMd, fontSize: 12.5, color: C.ink }} itemStyle={{ color: C.ink }} labelStyle={{ color: C.muted }} />
+              <Bar dataKey="Plot" radius={[4, 4, 4, 4]}>
                 {chartData.map((d, i) => <Cell key={i} fill={d.Saldo < 0 ? C.coral : C.emerald} fillOpacity={d.contado ? 1 : 0.3} />)}
+                <LabelList dataKey="Plot" content={(pr) => {
+                  const d = chartData[pr.index];
+                  if (!d || !d.contado || !d.temDados) return null;
+                  const topo = Math.min(pr.y, pr.y + pr.height), fundo = Math.max(pr.y, pr.y + pr.height);
+                  const neg = d.Saldo < 0;
+                  const v = Math.round(Math.abs(d.Saldo));
+                  const txt = `${neg ? "−" : "+"}${v.toLocaleString("pt-BR")}`;
+                  return <text x={pr.x + pr.width / 2} y={neg ? fundo + 12 : topo - 5} textAnchor="middle" fontSize={10.5} fontWeight={700} fill={neg ? C.coral : C.emerald}>{txt}</text>;
+                }} />
               </Bar>
             </BarChart>
           </ResponsiveContainer>
@@ -2629,12 +2715,17 @@ function ResumoTab({ custos, receitas, inicioContagem, onChangeInicio }) {
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))", gap: 12 }}>
-        {rows.map((r, i) => (
+        {rows.map((r, i) => r.temDados || r.mesKey === currentMonth() ? (
           <MonthCard key={r.mes} nome={r.mes} pago={r.totalPagoCusto} saldo={r.saldo} status={r.status}
             pctLiquidado={r.pctLiquidado} temDados={r.temDados} atual={r.mesKey === currentMonth()}
             foraContagem={i < inicioIdx} onClick={() => setMesDetalhe(r)} />
-        ))}
+        ) : null)}
       </div>
+      {vazios.length > 0 && (
+        <div style={{ marginTop: 14, fontSize: 12, color: C.faint }}>
+          Sem lançamentos: {vazios.map(r => r.mes).join(" · ")}
+        </div>
+      )}
 
       {mesDetalhe && (
         <MonthDetailModal
@@ -2766,7 +2857,15 @@ function DemandasTab({ demandas, onAdd, onRemove, onUpdate, onStatusChange, jump
     if (!form.nome) return;
     setSaving(true);
     try {
-      if (editingId) { await onUpdate(editingId, form); } else { await onAdd({ ...form, criadoEm: todayISO() }); }
+      if (editingId) {
+        const antes = demandas.find(d => d.id === editingId);
+        const extra = {};
+        if (antes && antes.status !== "Concluída" && form.status === "Concluída") extra.concluidaEm = todayISO();
+        else if (antes && antes.status === "Concluída" && form.status !== "Concluída") extra.concluidaEm = "";
+        await onUpdate(editingId, { ...form, ...extra });
+      } else {
+        await onAdd({ ...form, criadoEm: todayISO(), ...(form.status === "Concluída" ? { concluidaEm: todayISO() } : {}) });
+      }
       setForm(blank());
       setEditingId(null);
       setShowForm(false);
@@ -2782,6 +2881,7 @@ function DemandasTab({ demandas, onAdd, onRemove, onUpdate, onStatusChange, jump
     return Object.entries(map).filter(([,v]) => v > 0);
   }, [demandas]);
   const totalDemandas = demandas.length;
+  const atrasadasDem = useMemo(() => demandas.filter(d => d.status !== "Concluída" && (diasAteVenc(d.prazo) ?? 0) < 0).length, [demandas]);
   const pctConcluido = totalDemandas > 0 ? (resumo.concluida / totalDemandas) * 100 : 0;
   const COLUMNS = [
     { status: "Pendente", label: "Pendente", count: resumo.pendente, next: "Em Andamento" },
@@ -2802,8 +2902,28 @@ function DemandasTab({ demandas, onAdd, onRemove, onUpdate, onStatusChange, jump
           <span style={{ fontSize: 12.5, fontWeight: 700, color: C.emerald }}>{pctConcluido.toFixed(0)}% concluído</span>
         </div>
         <ProgressBar pct={pctConcluido} />
-        {porPrioridade.length > 0 && (
-          <div style={{ display: "flex", gap: 16, marginTop: 14 }}>
+        <div style={{ display: "flex", gap: 16, marginTop: 14, flexWrap: "wrap" }}>
+          {atrasadasDem > 0 && (
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ width: 8, height: 8, borderRadius: "50%", background: C.coral }} />
+              <span style={{ fontSize: 12, color: C.coral, fontWeight: 700 }}>{atrasadasDem} {atrasadasDem === 1 ? "atrasada" : "atrasadas"}</span>
+            </div>
+          )}
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ width: 8, height: 8, borderRadius: "50%", background: C.amber }} />
+            <span style={{ fontSize: 12, color: C.muted }}>Pendentes <strong style={{ color: C.ink }}>{resumo.pendente}</strong></span>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ width: 8, height: 8, borderRadius: "50%", background: C.lavender }} />
+            <span style={{ fontSize: 12, color: C.muted }}>Em andamento <strong style={{ color: C.ink }}>{resumo.andamento}</strong></span>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ width: 8, height: 8, borderRadius: "50%", background: C.emerald }} />
+            <span style={{ fontSize: 12, color: C.muted }}>Concluídas <strong style={{ color: C.ink }}>{resumo.concluida}</strong></span>
+          </div>
+        </div>
+        {porPrioridade.length > 1 && (
+          <div style={{ display: "flex", gap: 16, marginTop: 10 }}>
             {porPrioridade.map(([p, count]) => (
               <div key={p} style={{ display: "flex", alignItems: "center", gap: 6 }}>
                 <span style={{ width: 8, height: 8, borderRadius: "50%", background: PRIORIDADE_COLOR[p] }} />
@@ -2816,7 +2936,15 @@ function DemandasTab({ demandas, onAdd, onRemove, onUpdate, onStatusChange, jump
 
       <div className="kanban" style={{ display: "grid", gridTemplateColumns: "1fr", gap: 16 }}>
         {COLUMNS.map(col => {
-          const items = demandas.filter(d => d.status === col.status);
+          const items = demandas.filter(d => d.status === col.status).sort((a, b) => {
+            // Open columns: earliest prazo first (overdue on top), no prazo last. Done: latest prazo first.
+            const pa = a.prazo || "", pb = b.prazo || "";
+            if (col.status === "Concluída") return (b.concluidaEm || pb).localeCompare(a.concluidaEm || pa);
+            if (!pa && !pb) return 0;
+            if (!pa) return 1;
+            if (!pb) return -1;
+            return pa.localeCompare(pb);
+          });
           return (
             <div key={col.status}>
               <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, padding: "0 2px" }}>
@@ -2838,16 +2966,30 @@ function DemandasTab({ demandas, onAdd, onRemove, onUpdate, onStatusChange, jump
                       position: "relative", cursor: "pointer"
                     }}>
                       <div style={{ position: "absolute", left: 0, top: 10, bottom: 10, width: 3, borderRadius: 3, background: PRIORIDADE_COLOR[d.prioridade] || C.border }} />
-                      <div style={{ fontWeight: 700, color: C.ink, fontSize: 14.5, marginBottom: 3 }}>{d.nome}</div>
+                      <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+                        <div style={{ fontWeight: 700, color: C.ink, fontSize: 14.5, marginBottom: 3, flex: 1, minWidth: 0 }}>{d.nome}</div>
+                        {!col.next && (
+                          <button onClick={(e) => { e.stopPropagation(); if (window.confirm("Remover esta demanda?")) onRemove(d.id); }} title="Remover" style={{
+                            border: "none", background: "transparent", color: C.faint, cursor: "pointer",
+                            padding: 2, display: "flex", alignItems: "center", flexShrink: 0, marginRight: 10
+                          }}>
+                            <Trash2 size={15} />
+                          </button>
+                        )}
+                      </div>
                       <div style={{ fontSize: 11.5, color: C.muted, marginBottom: 3 }}>
                         Prazo {fmtDate(d.prazo)} · {d.prioridade}{d.contato ? ` · ${d.contato}` : ""}{d.detalhes ? ` · ${d.detalhes}` : ""}
                       </div>
-                      {d.criadoEm && (
-                        <div style={{ fontSize: 10.5, color: C.faint, marginBottom: 10 }}>
-                          Criada em {fmtDate(d.criadoEm)}
+                      {d.status !== "Concluída" && (diasAteVenc(d.prazo) ?? 0) < 0 && (
+                        <div style={{ fontSize: 11, fontWeight: 700, color: C.coral, marginBottom: 3 }}>{fmtAtraso(-diasAteVenc(d.prazo))}</div>
+                      )}
+                      {(d.criadoEm || (d.status === "Concluída" && d.concluidaEm)) && (
+                        <div style={{ fontSize: 10.5, color: C.faint, marginBottom: col.next ? 10 : 0 }}>
+                          {d.status === "Concluída" && d.concluidaEm && <div style={{ color: C.emerald, fontWeight: 700, fontSize: 11, marginBottom: 2 }}>Concluída em {fmtDate(d.concluidaEm)}</div>}
+                          {d.criadoEm && <div>Criada em {fmtDate(d.criadoEm)}</div>}
                         </div>
                       )}
-                      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      {col.next && <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                         {col.next && (
                           <button onClick={(e) => { e.stopPropagation(); onStatusChange(d.id, col.next); }} style={{
                             display: "flex", alignItems: "center", gap: 5, border: "none", background: C.border,
@@ -2862,7 +3004,7 @@ function DemandasTab({ demandas, onAdd, onRemove, onUpdate, onStatusChange, jump
                         }}>
                           <Trash2 size={15} />
                         </button>
-                      </div>
+                      </div>}
                     </div>
                   ))}
                 </div>
@@ -2883,13 +3025,13 @@ function DemandasTab({ demandas, onAdd, onRemove, onUpdate, onStatusChange, jump
           }
         >
           <form id="demanda-form" onSubmit={submit} style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, padding: "4px 0 24px" }}>
-            <Field label="Nome da Demanda"><TextInput style={{gridColumn:"span 2"}} required value={form.nome} onChange={e=>setForm({...form,nome:e.target.value})} /></Field>
+            <Field label="Nome da Demanda" span={2}><TextInput required value={form.nome} onChange={e=>setForm({...form,nome:e.target.value})} /></Field>
             <Field label="Contato"><TextInput value={form.contato} onChange={e=>setForm({...form,contato:e.target.value})} /></Field>
             <Field label="Prazo"><TextInput type="date" value={form.prazo} onChange={e=>setForm({...form,prazo:e.target.value})} /></Field>
             <Field label="Prioridade"><SelectInput options={PRIORIDADES} value={form.prioridade} onChange={e=>setForm({...form,prioridade:e.target.value})} /></Field>
             <Field label="Status"><SelectInput options={STATUS_DEMANDA} value={form.status} onChange={e=>setForm({...form,status:e.target.value})} /></Field>
-            <Field label="Detalhes"><TextInput style={{gridColumn:"span 2"}} value={form.detalhes} onChange={e=>setForm({...form,detalhes:e.target.value})} /></Field>
-            <Field label="Observações"><TextArea rows={10} style={{gridColumn:"span 2", height: 260}} value={form.obs} onChange={e=>setForm({...form,obs:e.target.value})} /></Field>
+            <Field label="Detalhes" span={2}><TextInput value={form.detalhes} onChange={e=>setForm({...form,detalhes:e.target.value})} /></Field>
+            <Field label="Observações" span={2}><TextArea rows={10} style={{ height: 260 }} value={form.obs} onChange={e=>setForm({...form,obs:e.target.value})} /></Field>
           </form>
         </Modal>
       )}
