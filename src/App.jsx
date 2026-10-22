@@ -20,7 +20,20 @@ const receitasCol = collection(db, "receitas");
 const demandasCol = collection(db, "demandas");
 
 const MESES = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
-const FONTES = ["Conta Salário","Conta Corrente","Dinheiro","PIX","Transferência","Débito Automático","BB"];
+const FONTES = ["Conta Salário","Conta Corrente","Dinheiro","PIX","Transferência","Débito Automático","BB","Transferência (Corrente)","Transferência (Salário)"];
+// PIX and Débito Automático always leave the Conta Corrente, so they count as it in totals
+// and charts (the record keeps its own fonte). "BB" is just the bank's abbreviation, not an
+// account, so it is no longer offered for new entries.
+const FONTES_FORM = FONTES.filter(f => f !== "BB" && f !== "Transferência");
+// Transferência leaves either sub-account of the same bank account, so it is split in two options.
+const contaDaFonte = (f) => (f === "PIX" || f === "Débito Automático" || f === "Transferência (Corrente)") ? "Conta Corrente" : f === "Transferência (Salário)" ? "Conta Salário" : f;
+const fonteCombina = (c, filtro) => filtro === "Todas" || c.fonte === filtro || contaDaFonte(c.fonte) === filtro;
+const notasMeios = (lista) => {
+  const g = {};
+  lista.filter(c => c.fonte !== contaDaFonte(c.fonte)).forEach(c => { const k = contaDaFonte(c.fonte); g[k] = g[k] || []; if (!g[k].includes(c.fonte)) g[k].push(c.fonte); });
+  return Object.entries(g).map(([k, m]) => `${k} inclui ${m.join(" e ")}`);
+};
+const opcoesFonte = (atual) => (atual && !FONTES_FORM.includes(atual)) ? [...FONTES_FORM, atual] : FONTES_FORM;
 const STATUS_CUSTO = ["Pago","Pendente","Atrasado"];
 const STATUS_RECEITA = ["Recebido","Parcial","Pendente"];
 const PRIORIDADES = ["Alta","Média","Baixa"];
@@ -71,7 +84,6 @@ const FONTE_KEYWORDS = [
   { re: /\btransfer[êe]ncia\b/i, fonte: "Transferência" },
   { re: /\bdinheiro\b/i, fonte: "Dinheiro" },
   { re: /\bpix\b/i, fonte: "PIX" },
-  { re: /\bbb\b/i, fonte: "BB" },
 ];
 const fonteEmTexto = (segment) => {
   for (const { re, fonte } of FONTE_KEYWORDS) if (re.test(segment)) return fonte;
@@ -424,7 +436,7 @@ const PALETTE_OUT = ["#FF5A68", "#FF8A3D", "#FFC53D", "#F472B6", "#A78BFA", "#38
 const PALETTE_IN = ["#00E0A8", "#22D3EE", "#4FA3FF", "#B5E655", "#818CF8", "#FDE047", "#F0ABFC", "#86EFAC"];
 const CHART_PALETTE = PALETTE_OUT;
 // Cor fixa por fonte: "Conta Salário" tem sempre a mesma cor em qualquer gráfico ou mês.
-const fonteColor = (name) => PALETTE_OUT[Math.max(0, FONTES.indexOf(name)) % PALETTE_OUT.length];
+const fonteColor = (name) => PALETTE_OUT[Math.max(0, FONTES.indexOf(contaDaFonte(name))) % PALETTE_OUT.length];
 const STATUS_ACCENT = {
   "Pago": C.emerald, "Recebido": C.emerald, "Concluída": C.emerald,
   "Parcial": C.amber, "Em Andamento": C.amber, "Pendente": C.amber,
@@ -856,7 +868,8 @@ function QuickAddFab({ onAddCusto, onAddReceita, demandas = [], onResolveDemanda
                   <TextInput type="date" value={d.data} onChange={e => updateDraft(i, { data: e.target.value })} />
                 </Field>
                 <Field label={d.tipo === "custo" ? "Fonte de Pagamento" : "Conta de Destino"}>
-                  <SelectInput options={FONTES} value={d.fonte || (d.tipo === "custo" ? FONTES[0] : FONTES[1])} onChange={e => updateDraft(i, { fonte: e.target.value })} />
+                  <SelectInput options={opcoesFonte(d.fonte)} value={d.fonte || (d.tipo === "custo" ? FONTES[0] : FONTES[1])} onChange={e => updateDraft(i, { fonte: e.target.value })} />
+                  {d.fonte === "Transferência" && <div style={{ fontSize: 11, color: C.amber, marginTop: 4 }}>Escolha de qual conta saiu: Transferência (Corrente) ou (Salário).</div>}
                 </Field>
                 <Field label="Status">
                   <SelectInput options={d.tipo === "custo" ? STATUS_CUSTO : STATUS_RECEITA} value={d.status || "Pendente"} onChange={e => updateDraft(i, { status: e.target.value })} />
@@ -1131,6 +1144,8 @@ export default function App() {
         .grid2 { display: grid; grid-template-columns: 1fr; gap: 20px; }
         @media (min-width: 680px) { .grid2 { grid-template-columns: 1fr 1fr; } .grid2 > * { margin-bottom: 0 !important; } }
         @media (min-width: 1100px) { .grid2 { grid-template-columns: 1fr 1fr 1fr; } }
+        .grid2c { display: grid; grid-template-columns: 1fr; gap: 20px; }
+        @media (min-width: 680px) { .grid2c { grid-template-columns: 1fr 1fr; } .grid2c > * { margin-bottom: 0 !important; } }
         @media (min-width: 760px) { .kanban { grid-template-columns: 1fr 1fr 1fr !important; } }
       `}</style>
 
@@ -1285,12 +1300,12 @@ function BalanceHero({ saldo, trendAtual, trendAnterior, mesLabel, hidden, onTog
             {trendPct !== null ? (
               <span style={{ display: "flex", alignItems: "center", gap: 2, fontSize: 10.5, fontWeight: 700, color: trendPct >= 0 ? "#4FE8BE" : "#FF8A76" }}>
                 {trendPct >= 0 ? <TrendingUp size={11} /> : <TrendingDown size={11} />}
-                {Math.abs(trendPct).toFixed(0)}% vs mês ant.
+                {Math.abs(trendPct).toFixed(0)}% vs mês ant. até hoje
               </span>
             ) : saldoDiff !== null && (
               <span style={{ display: "flex", alignItems: "center", gap: 2, fontSize: 10.5, fontWeight: 700, color: saldoDiff >= 0 ? "#4FE8BE" : "#FF8A76" }}>
                 {saldoDiff >= 0 ? <TrendingUp size={11} /> : <TrendingDown size={11} />}
-                {hidden ? "•••" : fmtBRL(Math.abs(saldoDiff))} vs mês ant.
+                {hidden ? "•••" : fmtBRL(Math.abs(saldoDiff))} vs mês ant. até hoje
               </span>
             )}
           </div>
@@ -1321,15 +1336,17 @@ function BalanceHero({ saldo, trendAtual, trendAnterior, mesLabel, hidden, onTog
           const fora = i < inicioIdx;
           const h = s === 0 ? 2 : fora ? Math.min(6, Math.max(3, (Math.abs(s) / maxAbs) * 24)) : Math.max(3, (Math.abs(s) / maxAbs) * 24);
           const positive = s >= 0;
+          const atualMes = i === new Date().getMonth();
+          const larg = atualMes ? 12 : 6;
           return (
             <div key={i} style={{ display: "flex", flexDirection: "column", alignItems: "center", flex: 1, gap: 3, opacity: fora ? 0.35 : 1 }}>
-              <div style={{ height: 24, display: "flex", alignItems: "flex-end" }}>
-                <div style={{ width: "100%", minWidth: 4, borderRadius: "3px 3px 0 0", height: positive ? h : 2, background: positive ? "#4FE8BE" : "rgba(255,255,255,0.12)" }} />
+              <div style={{ height: 24, width: "100%", display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
+                <div style={{ width: larg, borderRadius: "3px 3px 0 0", height: positive ? h : 2, background: positive ? "#4FE8BE" : "rgba(255,255,255,0.12)" }} />
               </div>
-              <div style={{ height: 24, display: "flex", alignItems: "flex-start" }}>
-                <div style={{ width: "100%", minWidth: 4, borderRadius: "0 0 3px 3px", height: positive ? 2 : h, background: positive ? "rgba(255,255,255,0.12)" : "#FF8A76" }} />
+              <div style={{ height: 24, width: "100%", display: "flex", alignItems: "flex-start", justifyContent: "center" }}>
+                <div style={{ width: larg, borderRadius: "0 0 3px 3px", height: positive ? 2 : h, background: positive ? "rgba(255,255,255,0.12)" : "#FF8A76" }} />
               </div>
-              <span style={{ fontSize: 8.5, color: "#7C86AD", fontWeight: 600 }}>{MESES_ABR[i]}</span>
+              <span style={{ fontSize: 8.5, color: atualMes ? "#4FE8BE" : "#7C86AD", fontWeight: atualMes ? 800 : 600 }}>{MESES_ABR[i]}</span>
             </div>
           );
         })}
@@ -1352,6 +1369,7 @@ function BalanceHero({ saldo, trendAtual, trendAnterior, mesLabel, hidden, onTog
                       <div style={{ fontSize: 13, fontWeight: 600, color: "#F3F5FA" }}>{f.fonte}</div>
                       <div style={{ fontSize: 10.5, color: "#7C86AD", marginTop: 1 }}>
                         Recebido {hidden ? "•••" : fmtBRL(f.recebido)} · {f.pendente > 0 ? "a pagar" : "pago"} {hidden ? "•••" : fmtBRL(f.pendente > 0 ? f.pendente : f.pago)}
+                        {!hidden && f.meios && Object.keys(f.meios).length > 0 && ` · inclui ${Object.entries(f.meios).map(([m, v]) => `${m} ${fmtBRL(v)}`).join(" e ")}`}
                       </div>
                     </div>
                     <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 700, fontSize: 13.5, color: f.saldo >= 0 ? "#4FE8BE" : "#FF8A76", flexShrink: 0 }}>
@@ -1407,6 +1425,27 @@ function useAtencao(custos, demandas, dias = 7) {
 }
 
 // "Atrasado há 20 dias" stays in days; very old items read better in months.
+// Center label for donut charts (total inside the hole).
+function DonutTotal({ total, hidden }) {
+  const txt = hidden ? "•••" : Number(total || 0).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return (
+    <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}>
+      <span style={{ fontSize: 9, color: C.faint, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5 }}>total</span>
+      <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, fontWeight: 700, color: C.ink }}>{txt}</span>
+    </div>
+  );
+}
+// Phone numbers inside free text become tappable (tel:) links.
+const renderTel = (texto) => {
+  const partes = String(texto || "").split(/(\+?\(?\d[\d\s\-()]{7,}\d)/g);
+  return partes.map((p, i) => i % 2 === 1
+    ? <a key={i} href={`tel:${p.replace(/[^\d+]/g, "")}`} onClick={(e) => e.stopPropagation()} style={{ color: C.lavender, textDecoration: "underline" }}>{p}</a>
+    : p);
+};
+// Saldos within this distance of zero are shown in a neutral tone (a month that closed even).
+const SALDO_NEUTRO = 100;
+const pctDe = (v, lista) => { const t = lista.reduce((s, x) => s + x.value, 0); return t > 0 ? `${Math.round((v / t) * 100)}%` : ""; };
+const saldoCor = (v) => Math.abs(v) < SALDO_NEUTRO ? C.lavender : v < 0 ? C.coral : C.emerald;
 const fmtAtraso = (dias) => {
   if (!(dias > 0)) return "Atrasado";
   if (dias < 30) return `Atrasado há ${dias} ${dias === 1 ? "dia" : "dias"}`;
@@ -1559,6 +1598,169 @@ function useRitmoMes(custos, mesAtual, nMeses = 3) {
   }, [custos, mesAtual, nMeses]);
 }
 
+// Cumulative "pago" day by day for one month, plus what is still to pay placed on its
+// due date (overdue items land on today), against the average cumulative of the
+// previous 3 months that had payments (same method as the Ritmo do mês).
+function serieSaidas(custos, mesKey, fonte) {
+  const [ano, mes] = mesKey.split("-").map(Number);
+  const nDias = new Date(ano, mes, 0).getDate();
+  const hoje = new Date();
+  const corrente = hoje.getFullYear() === ano && hoje.getMonth() + 1 === mes;
+  const futuro = mesKey > currentMonth();
+  const diaRef = corrente ? hoje.getDate() : futuro ? 0 : nDias;
+  const doFiltro = (c) => fonteCombina(c, fonte);
+  const porDia = (mk) => {
+    const arr = new Array(32).fill(0);
+    let n = 0;
+    custos.forEach(c => {
+      if (c.mes !== mk || c.status !== "Pago" || !c.dataPagamento || !doFiltro(c)) return;
+      const d = Number(c.dataPagamento.split("-")[2]);
+      if (d >= 1 && d <= 31) { arr[d] += Number(c.valorPago || 0); n++; }
+    });
+    return { arr, n };
+  };
+  const atual = porDia(mesKey);
+  const hist = [];
+  for (let i = 1; i <= 3; i++) {
+    const h = porDia(shiftMonth(mesKey, -i));
+    if (h.n > 0) hist.push(h.arr);
+  }
+  // Still to pay: placed on the due date (clamped to the month); overdue ones on today.
+  const abertos = custos.filter(c => c.mes === mesKey && c.status !== "Pago" && doFiltro(c));
+  const faltam = abertos.reduce((t, c) => t + Number(c.valorPrevisto || 0), 0);
+  const pendPorDia = new Array(nDias + 2).fill(0);
+  let nComData = 0;
+  abertos.forEach(c => {
+    if (!c.vencimento) return;
+    const [vy, vm, vd] = c.vencimento.split("-").map(Number);
+    if (!vy || !vm || !vd) return;
+    let dia = (vy === ano && vm === mes) ? vd : (vy * 12 + vm < ano * 12 + mes ? 1 : nDias);
+    dia = Math.min(nDias, Math.max(1, dia));
+    if (corrente) dia = Math.max(dia, diaRef);
+    pendPorDia[dia] += Number(c.valorPrevisto || 0);
+    nComData++;
+  });
+  const temProj = (corrente || futuro) && nComData > 0;
+  const rows = [];
+  let acA = 0;
+  const acH = hist.map(() => 0);
+  for (let d = 1; d <= nDias; d++) {
+    acA += atual.arr[d];
+    hist.forEach((arr, i) => { acH[i] += arr[d]; });
+    rows.push({
+      dia: d,
+      atual: d <= diaRef ? acA : null,
+      normal: hist.length ? acH.reduce((t, v) => t + v, 0) / hist.length : null,
+      prev: null
+    });
+  }
+  if (temProj) {
+    // dashed projection: real cumulative at the reference day + pending items due up to each day
+    let base = 0;
+    for (let d = 1; d <= diaRef; d++) base += atual.arr[d];
+    let acc = 0;
+    for (let d = 1; d <= nDias; d++) {
+      acc += pendPorDia[d];
+      if (d >= Math.max(1, diaRef)) rows[d - 1].prev = base + acc;
+    }
+  }
+  const ref = rows[Math.max(0, diaRef - 1)];
+  return {
+    rows, nDias, diaRef, corrente, futuro, nBase: hist.length, temProj, faltam, nFaltam: abertos.length,
+    pagoAteHoje: diaRef > 0 && ref ? ref.atual || 0 : 0, normalAteHoje: ref && ref.normal !== null && diaRef > 0 ? ref.normal : 0,
+    temDados: atual.n > 0 || ((corrente || futuro) && (hist.length > 0 || abertos.length > 0))
+  };
+}
+
+function SaidasMesCard({ serie, mesLabel }) {
+  const { rows, nDias, diaRef, corrente, nBase, temProj, faltam, nFaltam, pagoAteHoje, normalAteHoje } = serie;
+  const ticks = [1, 5, 10, 15, 20, 25, nDias].filter((v, i, a) => v <= nDias && a.indexOf(v) === i);
+  const dado = (t) => <strong style={{ color: C.ink }}>{t}</strong>;
+  return (
+    <div className="in" style={{ background: C.card, boxShadow: shadowSm, borderRadius: 16, padding: 16, display: "flex", flexDirection: "column" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
+        <span style={{ fontWeight: 700, fontSize: 12.5, color: C.ink, textTransform: "uppercase", letterSpacing: 0.4 }}>Saídas ao longo do mês</span>
+        <span style={{ display: "flex", gap: 10, fontSize: 11, color: C.muted, fontWeight: 600, flexWrap: "wrap" }}>
+          <span style={{ display: "flex", alignItems: "center", gap: 4 }}><span style={{ width: 10, height: 3, borderRadius: 2, background: C.coral }} />Pago</span>
+          {temProj && <span style={{ display: "flex", alignItems: "center", gap: 4 }}><span style={{ width: 10, height: 0, borderTop: `2px dotted ${C.coral}` }} />A pagar</span>}
+          {nBase > 0 && <span style={{ display: "flex", alignItems: "center", gap: 4 }}><span style={{ width: 10, height: 0, borderTop: `2px dashed ${C.muted}` }} />Normal</span>}
+        </span>
+      </div>
+      <div style={{ fontSize: 11.5, color: C.faint, marginBottom: 8, lineHeight: 1.5 }}>
+        <div>
+          {corrente ? <>Até o dia {diaRef}: pago {dado(fmtBRL(pagoAteHoje))}</> : serie.futuro ? <>Mês ainda não começou</> : <>Mês fechado: pago {dado(fmtBRL(pagoAteHoje))}</>}
+          {nFaltam > 0 && <> · {corrente || serie.futuro ? "faltam" : "sem pagar"} {dado(fmtBRL(faltam))} em {nFaltam} {nFaltam === 1 ? "conta" : "contas"}</>}
+        </div>
+        {nBase > 0 && !serie.futuro && <div>Normal até o dia {diaRef}: {dado(fmtBRL(normalAteHoje))}</div>}
+        {nBase === 0 && !temProj && <div>Ainda sem meses anteriores com pagamentos para comparar.</div>}
+      </div>
+      <div style={{ width: "100%", flex: 1, minHeight: 150 }}>
+        <ResponsiveContainer width="100%" height="100%" minHeight={150}>
+          <AreaChart data={rows} margin={{ top: 6, right: 6, left: 6, bottom: 0 }}>
+            <defs>
+              <linearGradient id="gSaidasMes" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#FF5A68" stopOpacity={0.35} /><stop offset="100%" stopColor="#FF5A68" stopOpacity={0.02} />
+              </linearGradient>
+            </defs>
+            <XAxis dataKey="dia" ticks={ticks} tick={{ fontSize: 10.5, fill: C.faint }} axisLine={{ stroke: C.border }} tickLine={false} />
+            <YAxis hide domain={[0, "dataMax"]} />
+            {corrente && <ReferenceLine x={diaRef} stroke={C.border} strokeDasharray="3 3" />}
+            <Tooltip
+              labelFormatter={(l) => `Dia ${l}`}
+              formatter={(v, n) => [fmtBRL(v), n]}
+              contentStyle={{ borderRadius: 10, border: "none", background: C.card, boxShadow: shadowMd, fontSize: 12, color: C.ink }}
+              itemStyle={{ color: C.ink }} labelStyle={{ color: C.muted }} />
+            {nBase > 0 && <Area type="monotone" dataKey="normal" name="Normal" stroke={C.muted} strokeWidth={1.6} strokeDasharray="5 4" fill="none" dot={false} isAnimationActive={false} />}
+            {temProj && <Area type="stepAfter" dataKey="prev" name="Com o que falta pagar" stroke="#FF5A68" strokeOpacity={0.75} strokeWidth={2} strokeDasharray="2 4" fill="none" dot={false} isAnimationActive={false} />}
+            <Area type="monotone" dataKey="atual" name="Pago" stroke="#FF5A68" strokeWidth={2.4} fill="url(#gSaidasMes)" dot={false} connectNulls={false} />
+          </AreaChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  );
+}
+
+// "Led" with the next cost to be paid: red if overdue, amber within 7 days, green beyond.
+function proximoVencimento(filtrados) {
+  const abertos = filtrados.filter(c => c.status !== "Pago");
+  if (abertos.length === 0) return null;
+  const comData = abertos.filter(c => c.vencimento).sort((a, b) => a.vencimento.localeCompare(b.vencimento));
+  const item = comData[0] || abertos[0];
+  const dias = item.vencimento ? diasAteVenc(item.vencimento) : null;
+  const faltaPagar = abertos.reduce((t, c) => t + Number(c.valorPrevisto || 0), 0);
+  let texto, cor;
+  if (dias === null) { texto = "Sem data de vencimento"; cor = C.amber; }
+  else if (dias < 0) { texto = fmtAtraso(-dias); cor = C.coral; }
+  else if (dias === 0) { texto = "Vence hoje"; cor = C.amber; }
+  else { texto = `Vence em ${dias} ${dias === 1 ? "dia" : "dias"}`; cor = dias <= 7 ? C.amber : C.emerald; }
+  return { item, texto, cor, nAbertos: abertos.length, faltaPagar };
+}
+
+function ProximoVencLed({ info, onOpen }) {
+  const { item, texto, cor, nAbertos, faltaPagar } = info;
+  return (
+    <div className="tap in" onClick={() => onOpen(item)} style={{
+      display: "flex", alignItems: "center", gap: 12, background: C.card, boxShadow: shadowSm, borderRadius: 16,
+      padding: "13px 16px", marginBottom: 16, cursor: "pointer"
+    }}>
+      <span style={{ width: 11, height: 11, borderRadius: 6, background: cor, boxShadow: `0 0 10px ${cor}`, flexShrink: 0 }} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 10.5, fontWeight: 700, color: C.muted, textTransform: "uppercase", letterSpacing: 0.5 }}>Próximo vencimento</div>
+        <div style={{ fontSize: 14, fontWeight: 700, color: C.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {item.descricao}{item.vencimento ? ` · ${fmtDate(item.vencimento)}` : ""}
+        </div>
+        <div style={{ fontSize: 11, color: C.faint, marginTop: 1 }}>
+          {nAbertos > 1 ? `${nAbertos} a pagar · ${fmtBRL(faltaPagar)} no total` : "Último a pagar neste mês"}
+        </div>
+      </div>
+      <div style={{ textAlign: "right", flexShrink: 0 }}>
+        <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 700, fontSize: 14, color: C.ink }}>{fmtBRL(item.valorPrevisto)}</div>
+        <div style={{ fontSize: 11.5, fontWeight: 700, color: cor }}>{texto}</div>
+      </div>
+    </div>
+  );
+}
+
 function DashboardTab({ custos, receitas, demandas, onNavigate, onConcluirDemanda, inicioContagem }) {
   const [hidden, setHidden] = useState(false);
   const [saldoAberto, setSaldoAberto] = useState(false);
@@ -1627,11 +1829,12 @@ function DashboardTab({ custos, receitas, demandas, onNavigate, onConcluirDemand
   // doesn't under-warn.
   const saldoPorFonte = useMemo(() => {
     const map = {};
-    const get = (f) => (map[f] || (map[f] = { recebido: 0, pago: 0, pendente: 0, itensPendentes: [] }));
+    const get = (f) => (map[f] || (map[f] = { recebido: 0, pago: 0, pendente: 0, itensPendentes: [], meios: {} }));
     custos.filter(c => c.mes === mesAtual).forEach(c => {
-      const f = get(c.fonte || "—");
+      const f = get(contaDaFonte(c.fonte || "—"));
       if (c.status === "Pago") {
         f.pago += Number(c.valorPago || 0);
+        if (c.fonte !== contaDaFonte(c.fonte)) f.meios[c.fonte] = (f.meios[c.fonte] || 0) + Number(c.valorPago || 0);
       } else {
         const v = Number(c.valorPrevisto || 0);
         f.pendente += v;
@@ -1639,7 +1842,7 @@ function DashboardTab({ custos, receitas, demandas, onNavigate, onConcluirDemand
       }
     });
     receitas.filter(r => r.mes === mesAtual).forEach(r => {
-      get(r.contaDestino || "—").recebido += Number(r.valorRecebido || 0);
+      get(contaDaFonte(r.contaDestino || "—")).recebido += Number(r.valorRecebido || 0);
     });
     return Object.entries(map)
       .map(([fonte, v]) => {
@@ -1655,10 +1858,12 @@ function DashboardTab({ custos, receitas, demandas, onNavigate, onConcluirDemand
     const map = {};
     custos.filter(c => c.mes === mesAtual).forEach(c => {
       const v = Number(c.valorPago ?? c.valorPrevisto ?? 0);
-      map[c.fonte] = (map[c.fonte] || 0) + v;
+      const k = contaDaFonte(c.fonte);
+      map[k] = (map[k] || 0) + v;
     });
     return Object.entries(map).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
   }, [custos, mesAtual]);
+  const meiosMes = useMemo(() => notasMeios(custos.filter(c => c.mes === mesAtual)), [custos, mesAtual]);
 
   const porCategoria = useMemo(() => {
     const map = {};
@@ -1683,10 +1888,10 @@ function DashboardTab({ custos, receitas, demandas, onNavigate, onConcluirDemand
       const mesKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
       const pago = custos.filter(c => c.mes === mesKey).reduce((s, c) => s + Number(c.valorPago || 0), 0);
       const recebido = receitas.filter(r => r.mes === mesKey).reduce((s, r) => s + Number(r.valorRecebido || 0), 0);
-      out.push({ mes: MESES_ABR[d.getMonth()], Pago: pago, Recebido: recebido });
+      out.push({ mes: MESES_ABR[d.getMonth()], Pago: pago, Recebido: recebido, fora: !!inicioContagem && mesKey < inicioContagem });
     }
     return out;
-  }, [custos, receitas]);
+  }, [custos, receitas, inicioContagem]);
 
   // Ranked by descrição, not by record: a cost split across fontes (one record
   // per fonte, same descrição) counts as ONE cost with its combined value.
@@ -1697,7 +1902,8 @@ function DashboardTab({ custos, receitas, demandas, onNavigate, onConcluirDemand
       const v = Number(c.valorPago ?? c.valorPrevisto ?? 0);
       const g = grupos.get(key) || { id: key, descricao: c.descricao, valor: 0, fontes: [] };
       g.valor += v;
-      if (c.fonte && !g.fontes.includes(c.fonte)) g.fontes.push(c.fonte);
+      const fc = contaDaFonte(c.fonte);
+      if (fc && !g.fontes.includes(fc)) g.fontes.push(fc);
       grupos.set(key, g);
     }
     return [...grupos.values()].sort((a, b) => b.valor - a.valor).slice(0, 5);
@@ -1714,15 +1920,17 @@ function DashboardTab({ custos, receitas, demandas, onNavigate, onConcluirDemand
     return { pago, aPagar, recebido, aReceber, saldoProjetado: (recebido + aReceber) - (pago + aPagar) };
   }, [custos, receitas, mesAtual]);
   const projMax = Math.max(1, projecao.recebido + projecao.aReceber, projecao.pago + projecao.aPagar);
+  const projQuitado = projecao.aPagar === 0 && projecao.aReceber === 0 && (projecao.pago + projecao.recebido) > 0;
 
   const comparativo = useMemo(() => {
-    const soma = (mes, fonte) => custos.filter(c => c.mes === mes && c.fonte === fonte).reduce((t, c) => t + Number(c.valorPago ?? c.valorPrevisto ?? 0), 0);
+    const soma = (mes, fonte) => custos.filter(c => c.mes === mes && contaDaFonte(c.fonte) === fonte).reduce((t, c) => t + Number(c.valorPago ?? c.valorPrevisto ?? 0), 0);
     return FONTES.map(f => ({ fonte: f, Atual: soma(mesAtual, f), Anterior: soma(mesAnterior, f) })).filter(r => r.Atual > 0 || r.Anterior > 0);
   }, [custos, mesAtual, mesAnterior]);
+  // Ranked by the change in R$ (a % on a tiny base, like R$ 299, is just noise).
   const variacoes = comparativo
-    .filter(r => r.Anterior > 0)
-    .map(r => ({ fonte: r.fonte, pct: ((r.Atual - r.Anterior) / r.Anterior) * 100 }))
-    .sort((a, b) => Math.abs(b.pct) - Math.abs(a.pct));
+    .map(r => ({ fonte: r.fonte, delta: r.Atual - r.Anterior, pct: r.Anterior > 0 ? ((r.Atual - r.Anterior) / r.Anterior) * 100 : null }))
+    .filter(r => Math.abs(r.delta) > 0.005)
+    .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
 
   // Months before the chosen "contar a partir de" month don't enter the sum
   // (and aren't drawn), so months with incomplete history can't distort it.
@@ -1776,23 +1984,23 @@ function DashboardTab({ custos, receitas, demandas, onNavigate, onConcluirDemand
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12, marginBottom: 16 }}>
           <div>
             <div style={{ fontWeight: 700, fontSize: 13.5, color: C.ink }}>Projeção de fechamento — {mesLabel}</div>
-            <div style={{ fontSize: 11.5, color: C.faint, marginTop: 3 }}>Se tudo o que está previsto for pago e recebido</div>
+            <div style={{ fontSize: 11.5, color: C.faint, marginTop: 3 }}>{projQuitado ? "Tudo o que foi lançado já foi pago e recebido" : "Se tudo o que está previsto for pago e recebido"}</div>
           </div>
           <div style={{ textAlign: "right" }}>
             <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 24, fontWeight: 700, color: projecao.saldoProjetado < 0 ? C.coral : C.emerald }}>
               {hidden ? "R$ •••••" : fmtBRL(projecao.saldoProjetado)}
             </div>
-            <div style={{ fontSize: 11, color: C.faint }}>saldo previsto no fim do mês</div>
+            <div style={{ fontSize: 11, color: C.faint }}>{projQuitado ? "saldo do mês" : "saldo previsto no fim do mês"}</div>
           </div>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <ProjBar label="Entradas" done={projecao.recebido} pending={projecao.aReceber} color={C.emerald} max={projMax} hidden={hidden} />
           <ProjBar label="Saídas" done={projecao.pago} pending={projecao.aPagar} color={C.coral} max={projMax} hidden={hidden} />
         </div>
-        <div style={{ display: "flex", gap: 16, marginTop: 12, fontSize: 11, color: C.faint, flexWrap: "wrap" }}>
+        {!projQuitado && <div style={{ display: "flex", gap: 16, marginTop: 12, fontSize: 11, color: C.faint, flexWrap: "wrap" }}>
           <span style={{ display: "flex", alignItems: "center", gap: 6 }}><span style={{ width: 10, height: 10, borderRadius: 3, background: C.muted }} />já realizado</span>
           <span style={{ display: "flex", alignItems: "center", gap: 6 }}><span style={{ width: 10, height: 10, borderRadius: 3, background: `repeating-linear-gradient(135deg, ${C.muted}88 0 3px, ${C.muted}33 3px 6px)` }} />ainda previsto</span>
-        </div>
+        </div>}
         <div style={{ marginTop: 18 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
             <span style={{ fontWeight: 700, fontSize: 12.5, color: C.ink }}>Ritmo do mês</span>
@@ -1835,7 +2043,8 @@ function DashboardTab({ custos, receitas, demandas, onNavigate, onConcluirDemand
             <div style={{ color: C.muted, fontSize: 13, padding: "16px 0", textAlign: "center" }}>Sem custos lançados neste mês.</div>
           ) : (
             <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-              <div style={{ width: 130, height: 130, flexShrink: 0 }}>
+              <div style={{ width: 130, height: 130, flexShrink: 0, position: "relative" }}>
+                <DonutTotal total={porFonte.reduce((t, f) => t + f.value, 0)} hidden={hidden} />
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
                     <Pie data={porFonte} dataKey="value" nameKey="name" innerRadius={36} outerRadius={60} paddingAngle={2}>
@@ -1850,9 +2059,11 @@ function DashboardTab({ custos, receitas, demandas, onNavigate, onConcluirDemand
                   <div key={f.name} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5 }}>
                     <span style={{ width: 9, height: 9, borderRadius: 3, background: fonteColor(f.name), flexShrink: 0 }} />
                     <span style={{ color: C.ink, flex: 1 }}>{f.name}</span>
-                    <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: C.muted, fontSize: 12 }}>{fmtBRL(f.value)}</span>
+                    <span style={{ fontSize: 10.5, color: C.faint, minWidth: 28, textAlign: "right" }}>{pctDe(f.value, porFonte)}</span>
+                    <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: C.muted, fontSize: 12 }}>{hidden ? "•••" : fmtBRL(f.value)}</span>
                   </div>
                 ))}
+                {meiosMes.length > 0 && <div style={{ fontSize: 10.5, color: C.faint, marginTop: 2 }}>{meiosMes.join(" · ")}</div>}
               </div>
             </div>
           )}
@@ -1864,7 +2075,8 @@ function DashboardTab({ custos, receitas, demandas, onNavigate, onConcluirDemand
             <div style={{ color: C.muted, fontSize: 13, padding: "16px 0", textAlign: "center" }}>Sem receitas lançadas neste mês.</div>
           ) : (
             <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-              <div style={{ width: 130, height: 130, flexShrink: 0 }}>
+              <div style={{ width: 130, height: 130, flexShrink: 0, position: "relative" }}>
+                <DonutTotal total={porCategoria.reduce((t, f) => t + f.value, 0)} hidden={hidden} />
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
                     <Pie data={porCategoria} dataKey="value" nameKey="name" innerRadius={36} outerRadius={60} paddingAngle={2}>
@@ -1879,7 +2091,8 @@ function DashboardTab({ custos, receitas, demandas, onNavigate, onConcluirDemand
                   <div key={f.name} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5 }}>
                     <span style={{ width: 9, height: 9, borderRadius: 3, background: catColor(f.name), flexShrink: 0 }} />
                     <span title={f.name} style={{ color: C.ink, flex: 1, minWidth: 0, lineHeight: 1.25, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", wordBreak: "break-word" }}>{f.name}</span>
-                    <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: C.muted, fontSize: 12 }}>{fmtBRL(f.value)}</span>
+                    <span style={{ fontSize: 10.5, color: C.faint, minWidth: 28, textAlign: "right" }}>{pctDe(f.value, porCategoria)}</span>
+                    <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: C.muted, fontSize: 12 }}>{hidden ? "•••" : fmtBRL(f.value)}</span>
                   </div>
                 ))}
               </div>
@@ -1895,6 +2108,9 @@ function DashboardTab({ custos, receitas, demandas, onNavigate, onConcluirDemand
               <span style={{ display: "flex", alignItems: "center", gap: 4 }}><span style={{ width: 8, height: 8, borderRadius: 2, background: "#00B98A" }} />Recebido</span>
             </span>
           </div>
+          {tendencia.some(d => d.fora) && (
+            <div style={{ fontSize: 11, color: C.faint, marginBottom: 6 }}>Meses esmaecidos são anteriores ao início da contagem (lançamentos incompletos).</div>
+          )}
           <div style={{ width: "100%", flex: 1, minHeight: 170 }}>
             <ResponsiveContainer width="100%" height="100%" minHeight={170}>
               <BarChart data={tendencia} barGap={4}>
@@ -1909,8 +2125,12 @@ function DashboardTab({ custos, receitas, demandas, onNavigate, onConcluirDemand
                 <XAxis dataKey="mes" tick={{ fontSize: 11, fill: C.faint }} axisLine={{ stroke: C.border }} tickLine={false} />
                 <YAxis hide />
                 <Tooltip content={<RichTooltip modo="saldo" colorMap={{ Pago: "#E8434F", Recebido: "#00B98A" }} />} />
-                <Bar dataKey="Pago" fill="url(#gPago)" radius={[4, 4, 0, 0]} />
-                <Bar dataKey="Recebido" fill="url(#gRecebido)" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="Pago" fill="url(#gPago)" radius={[4, 4, 0, 0]}>
+                  {tendencia.map((d, i) => <Cell key={i} fillOpacity={d.fora ? 0.3 : 1} />)}
+                </Bar>
+                <Bar dataKey="Recebido" fill="url(#gRecebido)" radius={[4, 4, 0, 0]}>
+                  {tendencia.map((d, i) => <Cell key={i} fillOpacity={d.fora ? 0.3 : 1} />)}
+                </Bar>
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -1965,7 +2185,10 @@ function DashboardTab({ custos, receitas, demandas, onNavigate, onConcluirDemand
               {variacoes[0] && (
                 <div style={{ fontSize: 12, color: C.muted, marginTop: 8 }}>
                   Maior variação: <strong style={{ color: C.ink }}>{variacoes[0].fonte}</strong>{" "}
-                  <strong style={{ color: variacoes[0].pct > 0 ? C.coral : C.emerald }}>{variacoes[0].pct > 0 ? "+" : ""}{variacoes[0].pct.toFixed(0)}%</strong>
+                  <strong style={{ color: variacoes[0].delta > 0 ? C.coral : C.emerald }}>
+                    {variacoes[0].delta > 0 ? "+" : "−"}{hidden ? "•••" : fmtBRL(Math.abs(variacoes[0].delta))}
+                  </strong>
+                  {variacoes[0].pct !== null && <span style={{ color: C.faint }}> ({variacoes[0].pct > 0 ? "+" : ""}{variacoes[0].pct.toFixed(0)}%)</span>}
                 </div>
               )}
             </>
@@ -2052,7 +2275,7 @@ function CardList({ rows, onRemove, onEdit, empty, render }) {
           {render(row)}
           <button onClick={(e) => { e.stopPropagation(); if (window.confirm("Remover este item?")) onRemove(row.id); }} title="Remover" style={{
             border: "none", background: "transparent", color: C.faint, cursor: "pointer",
-            padding: 4, display: "flex", alignItems: "center", flexShrink: 0, marginRight: 12
+            padding: 4, display: "flex", alignItems: "center", flexShrink: 0, marginRight: 30
           }}>
             <Trash2 size={16} />
           </button>
@@ -2087,7 +2310,7 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
   const [saving, setSaving] = useState(false);
 
   const filtrados = useMemo(() => {
-    const list = custos.filter(c => c.mes === mesFiltro && (fonteFiltro === "Todas" || c.fonte === fonteFiltro));
+    const list = custos.filter(c => c.mes === mesFiltro && fonteCombina(c, fonteFiltro));
     return [...list].sort((a, b) => {
       if (!a.dataPagamento && !b.dataPagamento) return 0;
       if (!a.dataPagamento) return 1;
@@ -2103,12 +2326,15 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
     const pendentes = filtrados.filter(c => c.status === "Pendente").length;
     const atrasados = filtrados.filter(c => c.status === "Atrasado").length;
     const porFonte = {};
-    filtrados.forEach(c => { porFonte[c.fonte] = (porFonte[c.fonte]||0) + Number(c.valorPago||0); });
+    filtrados.forEach(c => { const k = contaDaFonte(c.fonte); porFonte[k] = (porFonte[k]||0) + Number(c.valorPago||0); });
     // Largest fonte first — same ordering as the dashboard's "Custos por fonte".
     const porFonteOrdenado = Object.fromEntries(Object.entries(porFonte).sort((a, b) => b[1] - a[1]));
     const faltaPagar = filtrados.filter(c => c.status !== "Pago").reduce((s,c) => s + Number(c.valorPrevisto||0), 0);
     return { totalPrevisto, totalPago, diferenca: totalPago-totalPrevisto, faltaPagar, pagos, pendentes, atrasados, porFonte: porFonteOrdenado };
   }, [filtrados]);
+  const serie = useMemo(() => serieSaidas(custos, mesFiltro, fonteFiltro), [custos, mesFiltro, fonteFiltro]);
+  const meiosCustos = useMemo(() => notasMeios(filtrados), [filtrados]);
+  const proximo = useMemo(() => proximoVencimento(filtrados), [filtrados]);
 
   function blankCusto(mes) {
     return { mes, ano: parseInt(mes.split("-")[0],10), descricao: "", vencimento: "", dataPagamento: "",
@@ -2234,7 +2460,7 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
           <button type="button" onClick={() => setMesFiltro(m => shiftMonth(m, -1))} style={monthNavBtnStyle} aria-label="Mês anterior">‹</button>
           <button type="button" onClick={() => setMesFiltro(m => shiftMonth(m, 1))} style={monthNavBtnStyle} aria-label="Próximo mês">›</button>
         </div>
-        <Field label="Fonte"><SelectInput options={["Todas", ...FONTES]} value={fonteFiltro} onChange={e => setFonteFiltro(e.target.value)} /></Field>
+        <Field label="Fonte"><SelectInput options={["Todas", ...FONTES_FORM]} value={fonteFiltro} onChange={e => setFonteFiltro(e.target.value)} /></Field>
       </FilterBar>
 
       <StatRow stats={[
@@ -2258,30 +2484,38 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
         ) },
       ]} />
 
+      {proximo && <ProximoVencLed info={proximo} onOpen={openEdit} />}
+
       {Object.keys(totals.porFonte).length > 0 && (
-        <div className="in" style={{ marginBottom: 20, background: C.card, boxShadow: shadowSm, borderRadius: 16, padding: 16 }}>
+        <div className={serie.temDados ? "grid2c" : undefined} style={{ marginBottom: 20 }}>
+        <div className="in" style={{ background: C.card, boxShadow: shadowSm, borderRadius: 16, padding: 16, display: "flex", flexDirection: "column" }}>
           <div style={{ fontWeight: 700, fontSize: 12.5, color: C.ink, marginBottom: 10, textTransform: "uppercase", letterSpacing: 0.4 }}>Por fonte de pagamento</div>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-            <div style={{ width: 100, height: 100, flexShrink: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 18, flexWrap: "wrap", flex: 1 }}>
+            <div style={{ width: 124, height: 124, flexShrink: 0, position: "relative" }}>
+              <DonutTotal total={Object.values(totals.porFonte).reduce((t, v) => t + v, 0)} />
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
-                  <Pie data={Object.entries(totals.porFonte).map(([name,value])=>({name,value}))} dataKey="value" nameKey="name" innerRadius={28} outerRadius={48} paddingAngle={2}>
+                  <Pie data={Object.entries(totals.porFonte).map(([name,value])=>({name,value}))} dataKey="value" nameKey="name" innerRadius={36} outerRadius={58} paddingAngle={2}>
                     {Object.keys(totals.porFonte).map((f) => <Cell key={f} fill={fonteColor(f)} />)}
                   </Pie>
                   <Tooltip formatter={(v) => fmtBRL(v)} contentStyle={{ borderRadius: 10, border: "none", background: C.card, boxShadow: shadowMd, fontSize: 12, color: C.ink }} itemStyle={{ color: C.ink }} labelStyle={{ color: C.muted }} />
                 </PieChart>
               </ResponsiveContainer>
             </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 5, flex: "1 1 130px", maxWidth: 380 }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, flex: "0 1 auto" }}>
               {Object.entries(totals.porFonte).map(([f,v],i) => (
                 <div key={f} style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12 }}>
                   <span style={{ width: 8, height: 8, borderRadius: 3, background: fonteColor(f), flexShrink: 0 }} />
-                  <span style={{ color: C.ink, flex: 1 }}>{f}</span>
+                  <span style={{ color: C.ink, minWidth: 112 }}>{f}</span>
+                  <span style={{ fontSize: 10.5, color: C.faint, minWidth: 28, textAlign: "right" }}>{pctDe(v, Object.values(totals.porFonte).map(x => ({ value: x })))}</span>
                   <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: C.muted, fontSize: 11.5 }}>{fmtBRL(v)}</span>
                 </div>
               ))}
+              {meiosCustos.length > 0 && <div style={{ fontSize: 10.5, color: C.faint, marginTop: 2 }}>{meiosCustos.join(" · ")}</div>}
             </div>
           </div>
+        </div>
+        {serie.temDados && <SaidasMesCard serie={serie} mesLabel={monthLabel(mesFiltro)} />}
         </div>
       )}
 
@@ -2356,7 +2590,7 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
             <Field label="Data Pagamento"><TextInput type="date" value={form.dataPagamento} onChange={e=>setForm({...form,dataPagamento:e.target.value})} /></Field>
             <Field label="Valor Previsto (R$)"><TextInput type="text" inputMode="decimal" placeholder="0,00" required value={form.valorPrevisto} onChange={e=>setForm({...form,valorPrevisto:e.target.value})} /></Field>
             <Field label="Valor Pago (R$)"><TextInput type="text" inputMode="decimal" placeholder="0,00" value={form.valorPago} onChange={e=>setForm({...form,valorPago:e.target.value})} /></Field>
-            <Field label="Fonte de Pagamento"><SelectInput options={FONTES} value={form.fonte} onChange={e=>setForm({...form,fonte:e.target.value})} /></Field>
+            <Field label="Fonte de Pagamento"><SelectInput options={opcoesFonte(form.fonte)} value={form.fonte} onChange={e=>setForm({...form,fonte:e.target.value})} /></Field>
             <Field label="Status"><SelectInput options={STATUS_CUSTO} value={form.status} onChange={e => {
               // Marking a custo as Pago fills, right here in the form (still editable before saving),
               // the payment date and the paid value when they are empty.
@@ -2549,7 +2783,7 @@ function ReceitasTab({ receitas, onAdd, onRemove, onUpdate }) {
             <Field label="Categoria"><TextInput value={form.categoria} onChange={e=>setForm({...form,categoria:e.target.value})} /></Field>
             <Field label="Valor Previsto (R$)"><TextInput type="text" inputMode="decimal" placeholder="0,00" required value={form.valorPrevisto} onChange={e=>setForm({...form,valorPrevisto:e.target.value})} /></Field>
             <Field label="Valor Recebido (R$)"><TextInput type="text" inputMode="decimal" placeholder="0,00" value={form.valorRecebido} onChange={e=>setForm({...form,valorRecebido:e.target.value})} /></Field>
-            <Field label="Conta de Destino"><SelectInput options={FONTES} value={form.contaDestino} onChange={e=>setForm({...form,contaDestino:e.target.value})} /></Field>
+            <Field label="Conta de Destino"><SelectInput options={opcoesFonte(form.contaDestino)} value={form.contaDestino} onChange={e=>setForm({...form,contaDestino:e.target.value})} /></Field>
             <Field label="Status"><SelectInput options={STATUS_RECEITA} value={form.status} onChange={e => {
               // Marking a receita as Recebido fills the received value from the previsto when it is empty.
               const st = e.target.value;
@@ -2597,7 +2831,7 @@ function MonthCard({ nome, pago, saldo, status, pctLiquidado, temDados, atual, f
             <div style={{ fontSize: 10.5, color: C.muted, fontWeight: 600 }}>Saldo</div>
             <div style={{
               fontFamily: "'IBM Plex Mono', monospace", fontWeight: 700, fontSize: 13.5, whiteSpace: "nowrap",
-              color: saldo < 0 ? C.coral : C.emerald
+              color: saldoCor(saldo)
             }}>{fmtBRL(saldo)}</div>
           </div>
           {atual
@@ -2663,6 +2897,7 @@ function ResumoTab({ custos, receitas, inicioContagem, onChangeInicio }) {
     Plot: Math.max(domMin, Math.min(domMax, r.saldo))
   }));
   const vazios = rows.filter(r => !r.temDados && r.mesKey !== currentMonth());
+  const nCards = rows.filter(r => r.temDados || r.mesKey === currentMonth()).length;
 
   return (
     <div>
@@ -2685,7 +2920,7 @@ function ResumoTab({ custos, receitas, inicioContagem, onChangeInicio }) {
         { icon: <Wallet size={12}/>, label: "Previsto", value: fmtBRL(anual.previsto) },
         { icon: <Check size={12}/>, label: "Pago", value: fmtBRL(anual.pago) },
         { icon: <PiggyBank size={12}/>, label: "Recebido", value: fmtBRL(anual.recebido) },
-        { icon: anual.recebido-anual.pago<0?<TrendingDown size={12}/>:<TrendingUp size={12}/>, label: "Saldo do Ano", value: fmtBRL(anual.recebido-anual.pago), tone: anual.recebido-anual.pago<0?"red":"green" },
+        { icon: anual.recebido-anual.pago<0?<TrendingDown size={12}/>:<TrendingUp size={12}/>, label: inicioIdx > 0 ? `Saldo desde ${MESES_ABR[inicioIdx]}` : "Saldo do Ano", value: fmtBRL(anual.recebido-anual.pago), tone: anual.recebido-anual.pago<0?"red":"green" },
       ]} />
 
       <div style={{ background: C.card, boxShadow: shadowSm, borderRadius: 16, padding: 16, marginBottom: 16 }}>
@@ -2698,7 +2933,7 @@ function ResumoTab({ custos, receitas, inicioContagem, onChangeInicio }) {
               <ReferenceLine y={0} stroke={C.border} />
               <Tooltip formatter={(v, n, item) => [fmtBRL(item.payload.Saldo), "Saldo"]} contentStyle={{ borderRadius: 10, border: "none", background: C.card, boxShadow: shadowMd, fontSize: 12.5, color: C.ink }} itemStyle={{ color: C.ink }} labelStyle={{ color: C.muted }} />
               <Bar dataKey="Plot" radius={[4, 4, 4, 4]}>
-                {chartData.map((d, i) => <Cell key={i} fill={d.Saldo < 0 ? C.coral : C.emerald} fillOpacity={d.contado ? 1 : 0.3} />)}
+                {chartData.map((d, i) => <Cell key={i} fill={saldoCor(d.Saldo)} fillOpacity={d.contado ? 1 : 0.3} />)}
                 <LabelList dataKey="Plot" content={(pr) => {
                   const d = chartData[pr.index];
                   if (!d || !d.contado || !d.temDados) return null;
@@ -2706,7 +2941,7 @@ function ResumoTab({ custos, receitas, inicioContagem, onChangeInicio }) {
                   const neg = d.Saldo < 0;
                   const v = Math.round(Math.abs(d.Saldo));
                   const txt = `${neg ? "−" : "+"}${v.toLocaleString("pt-BR")}`;
-                  return <text x={pr.x + pr.width / 2} y={neg ? fundo + 12 : topo - 5} textAnchor="middle" fontSize={10.5} fontWeight={700} fill={neg ? C.coral : C.emerald}>{txt}</text>;
+                  return <text x={pr.x + pr.width / 2} y={neg ? fundo + 12 : topo - 5} textAnchor="middle" fontSize={10.5} fontWeight={700} fill={saldoCor(d.Saldo)}>{txt}</text>;
                 }} />
               </Bar>
             </BarChart>
@@ -2714,7 +2949,7 @@ function ResumoTab({ custos, receitas, inicioContagem, onChangeInicio }) {
         </div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))", gap: 12 }}>
+      <div style={{ display: "grid", gap: 12, gridTemplateColumns: nCards >= 5 && nCards <= 6 ? "repeat(auto-fill, minmax(max(140px, calc((100% - 24px) / 3 - 0.5px)), 1fr))" : "repeat(auto-fill, minmax(140px, 1fr))" }}>
         {rows.map((r, i) => r.temDados || r.mesKey === currentMonth() ? (
           <MonthCard key={r.mes} nome={r.mes} pago={r.totalPagoCusto} saldo={r.saldo} status={r.status}
             pctLiquidado={r.pctLiquidado} temDados={r.temDados} atual={r.mesKey === currentMonth()}
@@ -2722,7 +2957,7 @@ function ResumoTab({ custos, receitas, inicioContagem, onChangeInicio }) {
         ) : null)}
       </div>
       {vazios.length > 0 && (
-        <div style={{ marginTop: 14, fontSize: 12, color: C.faint }}>
+        <div style={{ marginTop: 14, marginBottom: 20, fontSize: 12, color: C.faint }}>
           Sem lançamentos: {vazios.map(r => r.mes).join(" · ")}
         </div>
       )}
@@ -2744,7 +2979,8 @@ function MonthDetailModal({ resumo, custos, receitas, onClose }) {
     const map = {};
     custos.forEach(c => {
       const v = Number(c.valorPago ?? c.valorPrevisto ?? 0);
-      map[c.fonte] = (map[c.fonte] || 0) + v;
+      const k = contaDaFonte(c.fonte);
+      map[k] = (map[k] || 0) + v;
     });
     return Object.entries(map).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
   }, [custos]);
@@ -2965,20 +3201,20 @@ function DemandasTab({ demandas, onAdd, onRemove, onUpdate, onStatusChange, jump
                       background: C.card, boxShadow: shadowSm, borderRadius: 14, padding: "13px 14px",
                       position: "relative", cursor: "pointer"
                     }}>
-                      <div style={{ position: "absolute", left: 0, top: 10, bottom: 10, width: 3, borderRadius: 3, background: PRIORIDADE_COLOR[d.prioridade] || C.border }} />
+                      <div style={{ position: "absolute", left: 0, top: 10, bottom: 10, width: 3, borderRadius: 3, background: d.status === "Concluída" ? C.emeraldDeep : (PRIORIDADE_COLOR[d.prioridade] || C.border) }} />
                       <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
                         <div style={{ fontWeight: 700, color: C.ink, fontSize: 14.5, marginBottom: 3, flex: 1, minWidth: 0 }}>{d.nome}</div>
                         {!col.next && (
                           <button onClick={(e) => { e.stopPropagation(); if (window.confirm("Remover esta demanda?")) onRemove(d.id); }} title="Remover" style={{
                             border: "none", background: "transparent", color: C.faint, cursor: "pointer",
-                            padding: 2, display: "flex", alignItems: "center", flexShrink: 0, marginRight: 10
+                            padding: 2, display: "flex", alignItems: "center", flexShrink: 0, marginRight: 24
                           }}>
                             <Trash2 size={15} />
                           </button>
                         )}
                       </div>
                       <div style={{ fontSize: 11.5, color: C.muted, marginBottom: 3 }}>
-                        Prazo {fmtDate(d.prazo)} · {d.prioridade}{d.contato ? ` · ${d.contato}` : ""}{d.detalhes ? ` · ${d.detalhes}` : ""}
+                        Prazo {fmtDate(d.prazo)}{porPrioridade.length > 1 ? ` · ${d.prioridade}` : ""}{d.contato ? <> · {renderTel(d.contato)}</> : null}{d.detalhes ? <> · {renderTel(d.detalhes)}</> : null}
                       </div>
                       {d.status !== "Concluída" && (diasAteVenc(d.prazo) ?? 0) < 0 && (
                         <div style={{ fontSize: 11, fontWeight: 700, color: C.coral, marginBottom: 3 }}>{fmtAtraso(-diasAteVenc(d.prazo))}</div>
@@ -2989,7 +3225,7 @@ function DemandasTab({ demandas, onAdd, onRemove, onUpdate, onStatusChange, jump
                           {d.criadoEm && <div>Criada em {fmtDate(d.criadoEm)}</div>}
                         </div>
                       )}
-                      {col.next && <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      {col.next && <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                         {col.next && (
                           <button onClick={(e) => { e.stopPropagation(); onStatusChange(d.id, col.next); }} style={{
                             display: "flex", alignItems: "center", gap: 5, border: "none", background: C.border,
@@ -2998,9 +3234,21 @@ function DemandasTab({ demandas, onAdd, onRemove, onUpdate, onStatusChange, jump
                             {col.next} <ArrowRight size={12} />
                           </button>
                         )}
+                        {(diasAteVenc(d.prazo) ?? 0) < 0 && (
+                          <button onClick={(e) => {
+                            e.stopPropagation();
+                            const novo = localISO(new Date(Date.now() + 7 * 86400000));
+                            if (window.confirm(`Adiar o prazo de "${d.nome}" para ${fmtDate(novo)}?`)) onUpdate(d.id, { prazo: novo });
+                          }} title="Adiar prazo em 7 dias" style={{
+                            display: "flex", alignItems: "center", gap: 5, border: `1px solid ${C.border}`, background: "transparent",
+                            color: C.muted, borderRadius: 9, padding: "5px 10px", fontSize: 11.5, fontWeight: 700, cursor: "pointer"
+                          }}>
+                            Adiar 7 dias
+                          </button>
+                        )}
                         <button onClick={(e) => { e.stopPropagation(); if (window.confirm("Remover esta demanda?")) onRemove(d.id); }} title="Remover" style={{
                           border: "none", background: "transparent", color: C.faint, cursor: "pointer",
-                          padding: 4, display: "flex", alignItems: "center", marginLeft: "auto"
+                          padding: 4, display: "flex", alignItems: "center", marginLeft: "auto", marginRight: 20
                         }}>
                           <Trash2 size={15} />
                         </button>
