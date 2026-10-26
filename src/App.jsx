@@ -27,7 +27,21 @@ const FONTES = ["Conta Salário","Conta Corrente","Dinheiro","PIX","Transferênc
 const FONTES_FORM = FONTES.filter(f => f !== "BB" && f !== "Transferência");
 // Transferência leaves either sub-account of the same bank account, so it is split in two options.
 const contaDaFonte = (f) => (f === "PIX" || f === "Débito Automático" || f === "Transferência (Corrente)") ? "Conta Corrente" : f === "Transferência (Salário)" ? "Conta Salário" : f;
+// "Depósito …" (cash put into the bank): not income, money just moves from Dinheiro to the receita's conta.
+const ehDeposito = (r) => /^\s*dep[óo]sito\b/i.test(r.descricao || "");
+// Where a receita normally lands: salário goes to Conta Salário; aluguéis (and deposits) go to Conta Corrente.
+const destinoPadraoReceita = (descricao) => /sal[áa]rio/i.test(descricao || "") ? "Conta Salário" : /aluguel|dep[óo]sito/i.test(descricao || "") ? "Conta Corrente" : null;
 const fonteCombina = (c, filtro) => filtro === "Todas" || c.fonte === filtro || contaDaFonte(c.fonte) === filtro;
+// PIX is a payment method, not an account: this only counts how many were registered and their sum.
+const resumoPix = (lista, mes) => {
+  const itens = lista.filter(c => c.mes === mes && c.fonte === "PIX");
+  const pagos = itens.filter(c => c.status === "Pago");
+  return {
+    n: pagos.length, total: pagos.reduce((t, c) => t + Number(c.valorPago || 0), 0),
+    nPend: itens.length - pagos.length, totalPend: itens.filter(c => c.status !== "Pago").reduce((t, c) => t + Number(c.valorPrevisto || 0), 0),
+    itens: [...pagos].sort((a, b) => String(b.dataPagamento || "").localeCompare(String(a.dataPagamento || "")))
+  };
+};
 const notasMeios = (lista) => {
   const g = {};
   lista.filter(c => c.fonte !== contaDaFonte(c.fonte)).forEach(c => { const k = contaDaFonte(c.fonte); g[k] = g[k] || []; if (!g[k].includes(c.fonte)) g[k].push(c.fonte); });
@@ -297,7 +311,7 @@ const confirmDateSanity = (dateStr, label = "data") => {
   );
 };
 
-function exportToExcel(data) {
+function exportToExcel(data, prefixo = "Controle_Financeiro") {
   const wb = XLSX.utils.book_new();
 
   const custosRows = data.custos.map(c => ({
@@ -346,7 +360,7 @@ function exportToExcel(data) {
   }));
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(demandasRows), "Demandas");
 
-  XLSX.writeFile(wb, `Controle_Financeiro_${todayISO()}.xlsx`);
+  XLSX.writeFile(wb, `${prefixo}_${todayISO()}.xlsx`);
 }
 
 function importFromExcel(file) {
@@ -548,7 +562,7 @@ const inputStyle = {
 
 // Native date/month inputs render taller than text inputs on iPad Safari, which
 // threw the form rows and the filter labels out of line; pin them to the same height.
-const dateInputFix = { height: 46, boxSizing: "border-box", WebkitAppearance: "none", appearance: "none", minWidth: 0 };
+const dateInputFix = { textAlign: "left", height: 46, boxSizing: "border-box", WebkitAppearance: "none", appearance: "none", minWidth: 0 };
 function TextInput(props) {
   const ehData = props.type === "date" || props.type === "month";
   return <input {...props} style={{ ...inputStyle, ...(ehData ? dateInputFix : {}), ...(props.style||{}) }} />;
@@ -767,7 +781,7 @@ function QuickAddFab({ onAddCusto, onAddReceita, demandas = [], onResolveDemanda
           await onAddReceita({
             mes, ano: anoNum, descricao: d.descricao, dataRecebimento: d.data,
             valorPrevisto: valorNum, valorRecebido: status === "Recebido" ? valorNum : null,
-            categoria: d.categoria || "", contaDestino: d.fonte || FONTES[1],
+            categoria: d.categoria || "", contaDestino: d.fonte || destinoPadraoReceita(d.descricao) || FONTES[1],
             status, obs: ""
           });
         }
@@ -868,7 +882,7 @@ function QuickAddFab({ onAddCusto, onAddReceita, demandas = [], onResolveDemanda
                   <TextInput type="date" value={d.data} onChange={e => updateDraft(i, { data: e.target.value })} />
                 </Field>
                 <Field label={d.tipo === "custo" ? "Fonte de Pagamento" : "Conta de Destino"}>
-                  <SelectInput options={opcoesFonte(d.fonte)} value={d.fonte || (d.tipo === "custo" ? FONTES[0] : FONTES[1])} onChange={e => updateDraft(i, { fonte: e.target.value })} />
+                  <SelectInput options={opcoesFonte(d.fonte)} value={d.fonte || (d.tipo === "custo" ? FONTES[0] : (destinoPadraoReceita(d.descricao) || FONTES[1]))} onChange={e => updateDraft(i, { fonte: e.target.value })} />
                   {d.fonte === "Transferência" && <div style={{ fontSize: 11, color: C.amber, marginTop: 4 }}>Escolha de qual conta saiu: Transferência (Corrente) ou (Salário).</div>}
                 </Field>
                 <Field label="Status">
@@ -990,6 +1004,8 @@ export default function App() {
 
   const loading = !(loadedFlags.custos && loadedFlags.receitas && loadedFlags.demandas);
   const data = useMemo(() => ({ custos, receitas, demandas }), [custos, receitas, demandas]);
+  const receitasRenda = useMemo(() => receitas.filter(r => !ehDeposito(r)), [receitas]);
+  const depositosRec = useMemo(() => receitas.filter(ehDeposito), [receitas]);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => setUser(u));
@@ -1073,21 +1089,56 @@ export default function App() {
     if (!file) return;
     try {
       const parsed = await importFromExcel(file);
+      const nArq = parsed.custos.length + parsed.receitas.length + parsed.demandas.length;
+      if (nArq === 0) {
+        alert("Este arquivo não tem custos, receitas nem demandas no formato do app. Nada foi alterado.");
+        return;
+      }
       const hasExisting = custos.length || receitas.length || demandas.length;
       if (hasExisting) {
-        const ok = window.confirm(
-          `Isso vai substituir os dados atuais (${custos.length} custos, ${receitas.length} receitas, ${demandas.length} demandas) pelos do arquivo importado. Continuar?`
+        const menos = parsed.custos.length < custos.length || parsed.receitas.length < receitas.length || parsed.demandas.length < demandas.length;
+        const resp = window.prompt(
+          `ATENÇÃO: isso vai SUBSTITUIR todos os dados atuais pelos do arquivo.\n\n` +
+          `Atual: ${custos.length} custos, ${receitas.length} receitas, ${demandas.length} demandas\n` +
+          `Arquivo: ${parsed.custos.length} custos, ${parsed.receitas.length} receitas, ${parsed.demandas.length} demandas\n` +
+          (menos ? `\nO arquivo tem MENOS registros do que o atual. Confira se é o arquivo certo.\n` : "") +
+          `\nAntes de substituir, um Excel com os dados atuais (Backup_antes_de_importar) será baixado.\n\nPara continuar, digite SUBSTITUIR:`
         );
-        if (!ok) { e.target.value = ""; return; }
+        if (!resp || resp.trim().toUpperCase() !== "SUBSTITUIR") return;
+        // Safety copy of what is there now; if it cannot be produced, nothing is touched.
+        exportToExcel(data, "Backup_antes_de_importar");
       }
-      const batch = writeBatch(db);
-      custos.forEach(c => batch.delete(doc(db, "custos", c.id)));
-      receitas.forEach(r => batch.delete(doc(db, "receitas", r.id)));
-      demandas.forEach(d => batch.delete(doc(db, "demandas", d.id)));
-      parsed.custos.forEach(c => { const { id, ...rest } = c; batch.set(doc(custosCol), rest); });
-      parsed.receitas.forEach(r => { const { id, ...rest } = r; batch.set(doc(receitasCol), rest); });
-      parsed.demandas.forEach(d => { const { id, ...rest } = d; batch.set(doc(demandasCol), rest); });
-      await batch.commit();
+      // New records are written first and the old ones removed afterwards, in small batches
+      // (Firestore allows at most 500 operations per batch). If something fails midway, the
+      // worst case is duplicates, never lost data.
+      const gravar = [
+        ...parsed.custos.map(c => { const { id, ...rest } = c; return (b) => b.set(doc(custosCol), rest); }),
+        ...parsed.receitas.map(r => { const { id, ...rest } = r; return (b) => b.set(doc(receitasCol), rest); }),
+        ...parsed.demandas.map(d => { const { id, ...rest } = d; return (b) => b.set(doc(demandasCol), rest); }),
+      ];
+      const apagar = [
+        ...custos.map(c => (b) => b.delete(doc(db, "custos", c.id))),
+        ...receitas.map(r => (b) => b.delete(doc(db, "receitas", r.id))),
+        ...demandas.map(d => (b) => b.delete(doc(db, "demandas", d.id))),
+      ];
+      const emLotes = async (ops) => {
+        for (let i = 0; i < ops.length; i += 400) {
+          const batch = writeBatch(db);
+          ops.slice(i, i + 400).forEach(op => op(batch));
+          await batch.commit();
+        }
+      };
+      let gravou = false;
+      try {
+        await emLotes(gravar);
+        gravou = true;
+        await emLotes(apagar);
+      } catch (err2) {
+        alert(gravou
+          ? "Os dados novos foram gravados, mas não foi possível remover todos os antigos. Pode haver registros duplicados: confira antes de repetir. O backup foi baixado."
+          : "A importação foi interrompida. Os dados antigos continuam intactos; alguns registros novos podem ter sido adicionados, então confira antes de repetir.");
+        return;
+      }
       setSaveError(false);
     } catch (err) {
       alert("Não foi possível importar este arquivo. Confirme se é um Excel exportado por este app.");
@@ -1144,6 +1195,7 @@ export default function App() {
         .grid2 { display: grid; grid-template-columns: 1fr; gap: 20px; }
         @media (min-width: 680px) { .grid2 { grid-template-columns: 1fr 1fr; } .grid2 > * { margin-bottom: 0 !important; } }
         @media (min-width: 1100px) { .grid2 { grid-template-columns: 1fr 1fr 1fr; } }
+        input[type="date"]::-webkit-date-and-time-value, input[type="month"]::-webkit-date-and-time-value { text-align: left; }
         .grid2c { display: grid; grid-template-columns: 1fr; gap: 20px; }
         @media (min-width: 680px) { .grid2c { grid-template-columns: 1fr 1fr; } .grid2c > * { margin-bottom: 0 !important; } }
         @media (min-width: 760px) { .kanban { grid-template-columns: 1fr 1fr 1fr !important; } }
@@ -1216,10 +1268,10 @@ export default function App() {
       </div>
 
       <main style={{ maxWidth: 1080, margin: "0 auto", padding: "20px 20px 0" }}>
-        {tab === "dashboard" && <DashboardTab custos={data.custos} receitas={data.receitas} demandas={data.demandas} onNavigate={goToItem} onConcluirDemanda={(id) => updateDemandaStatus(id, "Concluída")} inicioContagem={inicioContagem} />}
+        {tab === "dashboard" && <DashboardTab custos={data.custos} receitas={receitasRenda} depositos={depositosRec} demandas={data.demandas} onNavigate={goToItem} onConcluirDemanda={(id) => updateDemandaStatus(id, "Concluída")} inicioContagem={inicioContagem} />}
         {tab === "custos" && <CustosTab custos={data.custos} onAdd={addCusto} onRemove={removeCusto} onUpdate={updateCusto} jumpTarget={jumpTarget && jumpTarget.tab === "custos" ? jumpTarget : null} onConsumeJump={() => setJumpTarget(null)} />}
-        {tab === "receitas" && <ReceitasTab receitas={data.receitas} onAdd={addReceita} onRemove={removeReceita} onUpdate={updateReceita} />}
-        {tab === "resumo" && <ResumoTab custos={data.custos} receitas={data.receitas} inicioContagem={inicioContagem} onChangeInicio={mudarInicioContagem} />}
+        {tab === "receitas" && <ReceitasTab receitas={data.receitas} onAdd={addReceita} onRemove={removeReceita} onUpdate={updateReceita} inicioContagem={inicioContagem} />}
+        {tab === "resumo" && <ResumoTab custos={data.custos} receitas={receitasRenda} inicioContagem={inicioContagem} onChangeInicio={mudarInicioContagem} />}
         {tab === "demandas" && <DemandasTab demandas={data.demandas} onAdd={addDemanda} onRemove={removeDemanda} onUpdate={updateDemanda} onStatusChange={updateDemandaStatus} jumpTarget={jumpTarget && jumpTarget.tab === "demandas" ? jumpTarget : null} onConsumeJump={() => setJumpTarget(null)} />}
       </main>
 
@@ -1271,7 +1323,7 @@ function WrapTick({ x, y, payload, fmt, max = 11 }) {
   );
 }
 
-function BalanceHero({ saldo, trendAtual, trendAnterior, mesLabel, hidden, onToggle, saldosPorMes, porFonte, expanded, onToggleExpanded, inicioIdx = 0 }) {
+function BalanceHero({ pix, saldo, trendAtual, trendAnterior, mesLabel, hidden, onToggle, saldosPorMes, porFonte, expanded, onToggleExpanded, inicioIdx = 0 }) {
   // Scale only by the months that count (from "contar a partir de" on), so older
   // months with incomplete history can't flatten the ones that matter.
   const maxAbs = Math.max(1, ...saldosPorMes.filter((_, i) => i >= inicioIdx).map(s => Math.abs(s)));
@@ -1370,6 +1422,8 @@ function BalanceHero({ saldo, trendAtual, trendAnterior, mesLabel, hidden, onTog
                       <div style={{ fontSize: 10.5, color: "#7C86AD", marginTop: 1 }}>
                         Recebido {hidden ? "•••" : fmtBRL(f.recebido)} · {f.pendente > 0 ? "a pagar" : "pago"} {hidden ? "•••" : fmtBRL(f.pendente > 0 ? f.pendente : f.pago)}
                         {!hidden && f.meios && Object.keys(f.meios).length > 0 && ` · inclui ${Object.entries(f.meios).map(([m, v]) => `${m} ${fmtBRL(v)}`).join(" e ")}`}
+                        {!hidden && f.depositoSaida > 0 && ` · depositado na conta ${fmtBRL(f.depositoSaida)}`}
+                        {!hidden && f.depositoEntrada > 0 && ` · depósitos recebidos ${fmtBRL(f.depositoEntrada)}`}
                       </div>
                     </div>
                     <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 700, fontSize: 13.5, color: f.saldo >= 0 ? "#4FE8BE" : "#FF8A76", flexShrink: 0 }}>
@@ -1390,6 +1444,21 @@ function BalanceHero({ saldo, trendAtual, trendAnterior, mesLabel, hidden, onTog
                   )}
                 </div>
               ))}
+              {pix && (pix.n > 0 || pix.nPend > 0) && (
+                <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 0 2px", borderTop: "1px dashed rgba(255,255,255,0.12)", marginTop: 4 }}>
+                  <span style={{ width: 9, height: 9, borderRadius: 3, border: "1.5px solid #7C86AD", flexShrink: 0 }} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13.5, fontWeight: 700, color: "#B8BFDB" }}>PIX <span style={{ fontWeight: 500, fontSize: 11.5, color: "#7C86AD" }}>· meio de pagamento</span></div>
+                    <div style={{ fontSize: 11.5, color: "#7C86AD", marginTop: 1 }}>
+                      {pix.n} {pix.n === 1 ? "lançamento pago" : "lançamentos pagos"} · já somado na Conta Corrente
+                      {pix.nPend > 0 && !hidden ? ` · ${pix.nPend} a pagar ${fmtBRL(pix.totalPend)}` : ""}
+                    </div>
+                  </div>
+                  <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 700, fontSize: 13.5, color: "#B8BFDB", flexShrink: 0 }}>
+                    {hidden ? "•••" : fmtBRL(pix.total)}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -1601,7 +1670,7 @@ function useRitmoMes(custos, mesAtual, nMeses = 3) {
 // Cumulative "pago" day by day for one month, plus what is still to pay placed on its
 // due date (overdue items land on today), against the average cumulative of the
 // previous 3 months that had payments (same method as the Ritmo do mês).
-function serieSaidas(custos, mesKey, fonte) {
+function serieSaidas(custos, mesKey, fonte, minMes) {
   const [ano, mes] = mesKey.split("-").map(Number);
   const nDias = new Date(ano, mes, 0).getDate();
   const hoje = new Date();
@@ -1622,7 +1691,9 @@ function serieSaidas(custos, mesKey, fonte) {
   const atual = porDia(mesKey);
   const hist = [];
   for (let i = 1; i <= 3; i++) {
-    const h = porDia(shiftMonth(mesKey, -i));
+    const mk = shiftMonth(mesKey, -i);
+    if (minMes && mk < minMes) continue; // months before "contar a partir de" have incomplete launches
+    const h = porDia(mk);
     if (h.n > 0) hist.push(h.arr);
   }
   // Still to pay: placed on the due date (clamped to the month); overdue ones on today.
@@ -1696,7 +1767,7 @@ function SaidasMesCard({ serie, mesLabel, entrada = false }) {
           {nFaltam > 0 && <> · {corrente || serie.futuro ? "faltam" : T.sem} {dado(fmtBRL(faltam))} em {nFaltam} {nFaltam === 1 ? T.un[0] : T.un[1]}</>}
         </div>
         {nBase > 0 && !serie.futuro && <div>Normal até o dia {diaRef}: {dado(fmtBRL(normalAteHoje))}</div>}
-        {nBase === 0 && !temProj && <div>Ainda sem meses anteriores com pagamentos para comparar.</div>}
+        {nBase === 0 && !temProj && <div>Ainda sem meses anteriores com {entrada ? "recebimentos" : "pagamentos"} para comparar.</div>}
       </div>
       <div style={{ width: "100%", flex: 1, minHeight: 150 }}>
         <ResponsiveContainer width="100%" height="100%" minHeight={150}>
@@ -1772,7 +1843,42 @@ function ProximoVencLed({ info, onOpen, entrada = false }) {
   );
 }
 
-function DashboardTab({ custos, receitas, demandas, onNavigate, onConcluirDemanda, inicioContagem }) {
+function PixMesCard({ pix, mesLabel, hidden }) {
+  const { n, total, nPend, totalPend, itens } = pix;
+  return (
+    <div className="in" style={{ background: C.card, boxShadow: shadowSm, borderRadius: 16, padding: 16 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, marginBottom: 4 }}>
+        <span style={{ fontWeight: 700, fontSize: 12.5, color: C.ink, textTransform: "uppercase", letterSpacing: 0.4 }}>PIX do mês</span>
+        <span style={{ fontSize: 11, color: C.faint }}>{mesLabel}</span>
+      </div>
+      {n === 0 && nPend === 0 ? (
+        <div style={{ fontSize: 13, color: C.muted, padding: "10px 0 4px" }}>Nenhum PIX registrado neste mês.</div>
+      ) : (
+        <>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap", margin: "6px 0 2px" }}>
+            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 700, fontSize: 22, color: C.ink }}>{hidden ? "•••" : fmtBRL(total)}</span>
+            <span style={{ fontSize: 12.5, color: C.muted, fontWeight: 600 }}>{n} {n === 1 ? "PIX pago" : "PIX pagos"}</span>
+          </div>
+          <div style={{ fontSize: 11, color: C.faint, marginBottom: itens.length ? 10 : 0 }}>
+            Só os lançados com fonte PIX; já somados na Conta Corrente.
+            {nPend > 0 && !hidden ? ` Mais ${nPend} a pagar (${fmtBRL(totalPend)}).` : ""}
+          </div>
+          {itens.slice(0, 5).map(c => (
+            <div key={c.id} style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 12.5, padding: "5px 0", borderTop: `1px solid ${C.border}` }}>
+              <span style={{ color: C.ink, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {c.descricao}<span style={{ color: C.faint }}> · {fmtDate(c.dataPagamento)}</span>
+              </span>
+              <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: C.muted, flexShrink: 0 }}>{hidden ? "•••" : fmtBRL(c.valorPago)}</span>
+            </div>
+          ))}
+          {itens.length > 5 && <div style={{ fontSize: 11, color: C.faint, paddingTop: 6 }}>+{itens.length - 5} mais</div>}
+        </>
+      )}
+    </div>
+  );
+}
+
+function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, onConcluirDemanda, inicioContagem }) {
   const [hidden, setHidden] = useState(false);
   const [saldoAberto, setSaldoAberto] = useState(false);
   const ano = new Date().getFullYear();
@@ -1838,9 +1944,10 @@ function DashboardTab({ custos, receitas, demandas, onNavigate, onConcluirDemand
   // had movement this month. The warning sums ALL pending custos tied to a
   // fonte (not just the next one), so a fonte with several upcoming bills
   // doesn't under-warn.
+  const pixMes = useMemo(() => resumoPix(custos, mesAtual), [custos, mesAtual]);
   const saldoPorFonte = useMemo(() => {
     const map = {};
-    const get = (f) => (map[f] || (map[f] = { recebido: 0, pago: 0, pendente: 0, itensPendentes: [], meios: {} }));
+    const get = (f) => (map[f] || (map[f] = { recebido: 0, pago: 0, pendente: 0, itensPendentes: [], meios: {}, depositoSaida: 0, depositoEntrada: 0 }));
     custos.filter(c => c.mes === mesAtual).forEach(c => {
       const f = get(contaDaFonte(c.fonte || "—"));
       if (c.status === "Pago") {
@@ -1855,6 +1962,14 @@ function DashboardTab({ custos, receitas, demandas, onNavigate, onConcluirDemand
     receitas.filter(r => r.mes === mesAtual).forEach(r => {
       get(contaDaFonte(r.contaDestino || "—")).recebido += Number(r.valorRecebido || 0);
     });
+    // Received "Depósito …": leaves Dinheiro and enters the receita's conta (net zero overall).
+    depositos.filter(r => r.mes === mesAtual && r.status === "Recebido").forEach(r => {
+      const v = Number(r.valorRecebido || 0);
+      const dest = get(contaDaFonte(r.contaDestino || "—"));
+      dest.recebido += v; dest.depositoEntrada += v;
+      const din = get("Dinheiro");
+      din.pago += v; din.depositoSaida += v;
+    });
     return Object.entries(map)
       .map(([fonte, v]) => {
         const saldo = v.recebido - v.pago;
@@ -1863,7 +1978,7 @@ function DashboardTab({ custos, receitas, demandas, onNavigate, onConcluirDemand
       })
       .filter(f => f.recebido > 0 || f.pago > 0 || f.pendente > 0)
       .sort((a, b) => (a.vaiNegativar !== b.vaiNegativar ? (a.vaiNegativar ? -1 : 1) : b.saldo - a.saldo));
-  }, [custos, receitas, mesAtual]);
+  }, [custos, depositos, receitas, mesAtual]);
 
   const porFonte = useMemo(() => {
     const map = {};
@@ -1966,6 +2081,7 @@ function DashboardTab({ custos, receitas, demandas, onNavigate, onConcluirDemand
         emptyText="Nada atrasado nem vencendo nos próximos 7 dias." okWhenEmpty />
 
       <BalanceHero
+        pix={pixMes}
         saldo={kpis.saldo}
         trendAtual={saldoAteDiaAtual}
         trendAnterior={saldoAteDiaAnterior}
@@ -2251,9 +2367,10 @@ function DashboardTab({ custos, receitas, demandas, onNavigate, onConcluirDemand
         </div>
 
         {/* alignSelf: start — a short list must not be stretched to the height of its neighbour */}
-        <div style={{ alignSelf: "start" }}>
+        <div style={{ alignSelf: "start", display: "flex", flexDirection: "column", gap: 20 }}>
           <AttentionCard itens={proximos30} onNavigate={onNavigate} onConcluirDemanda={onConcluirDemanda} title="Próximos vencimentos (30 dias)" limit={8} neutro
             emptyText={atencao.length > 0 ? "Nenhum outro vencimento nos próximos 30 dias." : "Nenhum vencimento nos próximos 30 dias."} />
+          <PixMesCard pix={pixMes} mesLabel={mesLabel} hidden={hidden} />
         </div>
       </div>
     </div>
@@ -2316,6 +2433,8 @@ function agruparDivididos(items) {
 function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJump }) {
   const [mesFiltro, setMesFiltro] = useState(currentMonth());
   const [fonteFiltro, setFonteFiltro] = useState("Todas");
+  // Old records may still carry a fonte that is no longer offered (BB, plain "Transferência"); keep them filterable.
+  const fontesLegadas = useMemo(() => [...new Set(custos.map(c => c.fonte).filter(f => f && !FONTES_FORM.includes(f)))], [custos]);
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -2471,7 +2590,7 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
           <button type="button" onClick={() => setMesFiltro(m => shiftMonth(m, -1))} style={monthNavBtnStyle} aria-label="Mês anterior">‹</button>
           <button type="button" onClick={() => setMesFiltro(m => shiftMonth(m, 1))} style={monthNavBtnStyle} aria-label="Próximo mês">›</button>
         </div>
-        <Field label="Fonte"><SelectInput options={["Todas", ...FONTES_FORM]} value={fonteFiltro} onChange={e => setFonteFiltro(e.target.value)} /></Field>
+        <Field label="Fonte"><SelectInput options={["Todas", ...FONTES_FORM, ...fontesLegadas]} value={fonteFiltro} onChange={e => setFonteFiltro(e.target.value)} /></Field>
       </FilterBar>
 
       <StatRow stats={[
@@ -2627,7 +2746,7 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
 /*  Receitas Mensais                                                   */
 /* ------------------------------------------------------------------ */
 
-function ReceitasTab({ receitas, onAdd, onRemove, onUpdate }) {
+function ReceitasTab({ receitas, onAdd, onRemove, onUpdate, inicioContagem }) {
   const [mesFiltro, setMesFiltro] = useState(currentMonth());
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
@@ -2643,33 +2762,39 @@ function ReceitasTab({ receitas, onAdd, onRemove, onUpdate }) {
     });
   }, [receitas, mesFiltro]);
 
-  const totals = useMemo(() => {
-    const totalPrevisto = filtradas.reduce((s,r) => s + Number(r.valorPrevisto||0), 0);
-    const totalRecebido = filtradas.reduce((s,r) => s + Number(r.valorRecebido||0), 0);
-    const recebidas = filtradas.filter(r => r.status === "Recebido").length;
-    const pendentes = filtradas.filter(r => r.status !== "Recebido").length;
-    const aReceber = filtradas.filter(r => r.status !== "Recebido").reduce((s,r) => s + Number(r.valorPrevisto||0), 0);
-    return { totalPrevisto, totalRecebido, diferenca: totalRecebido-totalPrevisto, aReceber, recebidas, pendentes };
-  }, [filtradas]);
+  // Depósitos are listed, but are not income: totals, charts and the next-to-receive led only see the rest.
+  const rendas = useMemo(() => filtradas.filter(r => !ehDeposito(r)), [filtradas]);
+  const depositosLista = useMemo(() => filtradas.filter(ehDeposito), [filtradas]);
 
-  const comoCustos = useMemo(() => receitasComoCustos(receitas), [receitas]);
-  const serie = useMemo(() => serieSaidas(comoCustos, mesFiltro, "Todas"), [comoCustos, mesFiltro]);
-  const proximo = useMemo(() => proximoVencimento(receitasComoCustos(filtradas)), [filtradas]);
+  const totals = useMemo(() => {
+    const totalPrevisto = rendas.reduce((s,r) => s + Number(r.valorPrevisto||0), 0);
+    const totalRecebido = rendas.reduce((s,r) => s + Number(r.valorRecebido||0), 0);
+    const recebidas = rendas.filter(r => r.status === "Recebido").length;
+    const pendentes = rendas.filter(r => r.status !== "Recebido").length;
+    const aReceber = rendas.filter(r => r.status !== "Recebido").reduce((s,r) => s + Number(r.valorPrevisto||0), 0);
+    return { totalPrevisto, totalRecebido, diferenca: totalRecebido-totalPrevisto, aReceber, recebidas, pendentes };
+  }, [rendas]);
+
+  const comoCustos = useMemo(() => receitasComoCustos(receitas.filter(r => !ehDeposito(r))), [receitas]);
+  const serie = useMemo(() => serieSaidas(comoCustos, mesFiltro, "Todas", inicioContagem), [comoCustos, mesFiltro, inicioContagem]);
+  const proximo = useMemo(() => proximoVencimento(receitasComoCustos(rendas)), [rendas]);
   const porConta = useMemo(() => {
     const m = {};
-    filtradas.forEach(r => { const v = Number(r.valorRecebido || 0); if (v > 0) { const k = contaDaFonte(r.contaDestino || "—"); m[k] = (m[k] || 0) + v; } });
+    rendas.forEach(r => { const v = Number(r.valorRecebido || 0); if (v > 0) { const k = contaDaFonte(r.contaDestino || "—"); m[k] = (m[k] || 0) + v; } });
     return Object.entries(m).sort((a, b) => b[1] - a[1]);
-  }, [filtradas]);
-  const meiosRec = useMemo(() => notasMeios(receitasComoCustos(filtradas).filter(c => c.status === "Pago")), [filtradas]);
+  }, [rendas]);
+  const meiosRec = useMemo(() => notasMeios(receitasComoCustos(rendas).filter(c => c.status === "Pago")), [rendas]);
 
   function blankReceita(mes) {
     return { mes, ano: parseInt(mes.split("-")[0],10), descricao: "", dataRecebimento: "",
       valorPrevisto: "", valorRecebido: "", categoria: "", contaDestino: FONTES[1], status: "Pendente", obs: "" };
   }
   const [form, setForm] = useState(blankReceita(mesFiltro));
+  const destinoManual = useRef(false);
 
-  const openNew = () => { setEditingId(null); setForm(blankReceita(mesFiltro)); setShowForm(true); };
+  const openNew = () => { destinoManual.current = false; setEditingId(null); setForm(blankReceita(mesFiltro)); setShowForm(true); };
   const openEdit = (r) => {
+    destinoManual.current = true;
     setEditingId(r.id);
     setForm({
       mes: r.mes, ano: r.ano, descricao: r.descricao, dataRecebimento: r.dataRecebimento || "",
@@ -2681,9 +2806,10 @@ function ReceitasTab({ receitas, onAdd, onRemove, onUpdate }) {
 
   // Same two-block layout as Custos: what is still to come first, then what already came in.
   const gruposRec = useMemo(() => [
-    { chave: "aberto", rotulo: "A receber", accent: C.amber, items: filtradas.filter(r => r.status !== "Recebido") },
-    { chave: "recebido", rotulo: "Recebidas", accent: C.emerald, items: filtradas.filter(r => r.status === "Recebido") },
-  ].filter(g => g.items.length > 0), [filtradas]);
+    { chave: "aberto", rotulo: "A receber", accent: C.amber, items: rendas.filter(r => r.status !== "Recebido") },
+    { chave: "recebido", rotulo: "Recebidas", accent: C.emerald, items: rendas.filter(r => r.status === "Recebido") },
+    { chave: "deposito", rotulo: "Depósitos de dinheiro (não contam como receita)", accent: C.lavender, items: depositosLista },
+  ].filter(g => g.items.length > 0), [rendas, depositosLista]);
 
   const renderLinhaReceita = (r) => (
     <>
@@ -2836,12 +2962,17 @@ function ReceitasTab({ receitas, onAdd, onRemove, onUpdate }) {
           }
         >
           <form id="receita-form" onSubmit={submit} style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, padding: "4px 0 24px" }}>
-            <Field label="Descrição / Origem"><TextInput style={{gridColumn:"span 2"}} required value={form.descricao} onChange={e=>setForm({...form,descricao:e.target.value})} /></Field>
+            <Field label="Descrição / Origem"><TextInput style={{gridColumn:"span 2"}} required value={form.descricao} onChange={e => {
+              const v = e.target.value;
+              const sug = destinoPadraoReceita(v);
+              // New receita only: suggest the usual destination until the person picks one by hand.
+              setForm(f => ({ ...f, descricao: v, contaDestino: (!editingId && !destinoManual.current && sug) ? sug : f.contaDestino }));
+            }} /></Field>
             <Field label="Data Recebimento"><TextInput type="date" required value={form.dataRecebimento} onChange={e=>setForm({...form,dataRecebimento:e.target.value})} /></Field>
             <Field label="Categoria"><TextInput value={form.categoria} onChange={e=>setForm({...form,categoria:e.target.value})} /></Field>
             <Field label="Valor Previsto (R$)"><TextInput type="text" inputMode="decimal" placeholder="0,00" required value={form.valorPrevisto} onChange={e=>setForm({...form,valorPrevisto:e.target.value})} /></Field>
             <Field label="Valor Recebido (R$)"><TextInput type="text" inputMode="decimal" placeholder="0,00" value={form.valorRecebido} onChange={e=>setForm({...form,valorRecebido:e.target.value})} /></Field>
-            <Field label="Conta de Destino"><SelectInput options={opcoesFonte(form.contaDestino)} value={form.contaDestino} onChange={e=>setForm({...form,contaDestino:e.target.value})} /></Field>
+            <Field label="Conta de Destino"><SelectInput options={opcoesFonte(form.contaDestino)} value={form.contaDestino} onChange={e => { destinoManual.current = true; setForm({ ...form, contaDestino: e.target.value }); }} /></Field>
             <Field label="Status"><SelectInput options={STATUS_RECEITA} value={form.status} onChange={e => {
               // Marking a receita as Recebido fills the received value from the previsto when it is empty.
               const st = e.target.value;
