@@ -18,6 +18,7 @@ import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, BarChart, Bar, XAxis
 const custosCol = collection(db, "custos");
 const receitasCol = collection(db, "receitas");
 const demandasCol = collection(db, "demandas");
+const fixosCol = collection(db, "recorrentes");   // list of monthly fixed costs (only changed by explicit action)
 
 const MESES = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
 const FONTES = ["Conta Salário","Conta Corrente","Dinheiro","PIX","Transferência","Débito Automático","BB","Transferência (Corrente)","Transferência (Salário)"];
@@ -877,7 +878,7 @@ function QuickAddFab({ onAddCusto, onAddReceita, demandas = [], onResolveDemanda
                   </div>
                 </Field>
                 <Field label="Valor (R$)"><TextInput type="text" inputMode="decimal" placeholder="0,00" value={d.valor} onChange={e => updateDraft(i, { valor: e.target.value })} /></Field>
-                <Field label="Descrição"><TextInput style={{ gridColumn: "span 2" }} value={d.descricao} onChange={e => updateDraft(i, { descricao: e.target.value })} /></Field>
+                <Field label="Descrição" span={2}><TextInput value={d.descricao} onChange={e => updateDraft(i, { descricao: e.target.value })} /></Field>
                 <Field label={d.tipo === "custo" ? "Vencimento" : "Recebimento"}>
                   <TextInput type="date" value={d.data} onChange={e => updateDraft(i, { data: e.target.value })} />
                 </Field>
@@ -992,6 +993,8 @@ export default function App() {
   const [custos, setCustos] = useState([]);
   const [receitas, setReceitas] = useState([]);
   const [demandas, setDemandas] = useState([]);
+  const [fixos, setFixos] = useState([]);
+  const [fixosErro, setFixosErro] = useState(false);
   const [loadedFlags, setLoadedFlags] = useState({ custos: false, receitas: false, demandas: false });
   const [tab, setTab] = useState("dashboard");
   const [inicioContagem, setInicioContagem] = useState(lerInicioContagem);
@@ -1043,7 +1046,9 @@ export default function App() {
       setDemandas(snap.docs.map(toRow));
       setLoadedFlags(f => ({ ...f, demandas: true }));
     }, () => setSaveError(true));
-    return () => { unsubC(); unsubR(); unsubD(); };
+    // Fixos list: its own listener; a permission error here must not raise the app-wide save error.
+    const unsubF = onSnapshot(fixosCol, snap => { setFixos(snap.docs.map(toRow)); setFixosErro(false); }, () => setFixosErro(true));
+    return () => { unsubC(); unsubR(); unsubD(); unsubF(); };
   }, [user]);
 
   // Every write below touches only the single document it concerns —
@@ -1058,6 +1063,10 @@ export default function App() {
   const updateCusto = async (id, c) => {
     try { await updateDoc(doc(db, "custos", id), c); setSaveError(false); } catch (e) { setSaveError(true); }
   };
+  const avisoFixos = () => alert("Não consegui gravar a lista de fixos. Provavelmente falta liberar a coleção \"recorrentes\" nas regras do Firestore.");
+  const addFixo = async (x) => { try { await addDoc(fixosCol, x); } catch (e) { avisoFixos(); } };
+  const updateFixo = async (id, x) => { try { await updateDoc(doc(db, "recorrentes", id), x); } catch (e) { avisoFixos(); } };
+  const removeFixo = async (id) => { try { await deleteDoc(doc(db, "recorrentes", id)); } catch (e) { avisoFixos(); } };
   const addReceita = async (r) => {
     try { await addDoc(receitasCol, r); setSaveError(false); } catch (e) { setSaveError(true); }
   };
@@ -1269,7 +1278,7 @@ export default function App() {
 
       <main style={{ maxWidth: 1080, margin: "0 auto", padding: "20px 20px 0" }}>
         {tab === "dashboard" && <DashboardTab custos={data.custos} receitas={receitasRenda} depositos={depositosRec} demandas={data.demandas} onNavigate={goToItem} onConcluirDemanda={(id) => updateDemandaStatus(id, "Concluída")} inicioContagem={inicioContagem} />}
-        {tab === "custos" && <CustosTab custos={data.custos} onAdd={addCusto} onRemove={removeCusto} onUpdate={updateCusto} jumpTarget={jumpTarget && jumpTarget.tab === "custos" ? jumpTarget : null} onConsumeJump={() => setJumpTarget(null)} />}
+        {tab === "custos" && <CustosTab fixos={fixos} fixosErro={fixosErro} onAddFixo={addFixo} onUpdateFixo={updateFixo} onRemoveFixo={removeFixo} custos={data.custos} onAdd={addCusto} onRemove={removeCusto} onUpdate={updateCusto} jumpTarget={jumpTarget && jumpTarget.tab === "custos" ? jumpTarget : null} onConsumeJump={() => setJumpTarget(null)} />}
         {tab === "receitas" && <ReceitasTab receitas={data.receitas} onAdd={addReceita} onRemove={removeReceita} onUpdate={updateReceita} inicioContagem={inicioContagem} />}
         {tab === "resumo" && <ResumoTab custos={data.custos} receitas={receitasRenda} inicioContagem={inicioContagem} onChangeInicio={mudarInicioContagem} />}
         {tab === "demandas" && <DemandasTab demandas={data.demandas} onAdd={addDemanda} onRemove={removeDemanda} onUpdate={updateDemanda} onStatusChange={updateDemandaStatus} jumpTarget={jumpTarget && jumpTarget.tab === "demandas" ? jumpTarget : null} onConsumeJump={() => setJumpTarget(null)} />}
@@ -1818,6 +1827,170 @@ function proximoVencimento(filtrados) {
   return { item, texto, cor, nAbertos: abertos.length, faltaPagar };
 }
 
+/* ------------------------------------------------------------------ */
+/*  Fixos do mês — recurring costs list. It never writes by itself:    */
+/*  "Lançar" only opens the normal new-custo form, pre-filled.         */
+/* ------------------------------------------------------------------ */
+const FIXOS_INICIAIS = [
+  { descricao: "Aluguel", dia: 10, valor: 2675, fonte: "Conta Corrente" },
+  { descricao: "Prestação Pólo", dia: 3, valor: 1773.86, fonte: "Conta Salário" },
+  { descricao: "Prestação Gibson", dia: 30, valor: null, fonte: "Dinheiro" },
+  { descricao: "Facul Roberto", dia: 10, valor: 963.16, valorPago: 679.33, fonte: "" },
+  { descricao: "Facul Rubem", dia: 10, valor: 1282.85, valorPago: 862.90, fonte: "" },
+  { descricao: "Condomínio Via", dia: 10, valor: 813.47, fonte: "" },
+  { descricao: "Condomínio Altos", dia: 10, valor: 688.57, fonte: "" },
+  { descricao: "Unimed", dia: 10, valor: null, fonte: "" },
+  { descricao: "Pensão Rubem", dia: 5, valor: 1000, fonte: "" },
+  { descricao: "Pensão Zannie", dia: 5, valor: 700, fonte: "" },
+];
+const normDesc = (t) => String(t || "").trim().toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+// Vencimento of a fixo in month "AAAA-MM", clamped to the month's last day.
+function vencimentoDoFixo(f, mes) {
+  const [a, mm] = mes.split("-").map(Number);
+  const ultimo = new Date(a, mm, 0).getDate();
+  const d = Math.min(Math.max(parseInt(f.dia, 10) || 1, 1), ultimo);
+  return `${mes}-${String(d).padStart(2, "0")}`;
+}
+function fixosPendentes(fixos, custos, mes) {
+  const lancados = new Set(custos.filter(c => c.mes === mes).map(c => normDesc(c.descricao)));
+  const ativos = fixos.filter(f => f.ativo !== false);
+  return { ativos, faltam: ativos.filter(f => !lancados.has(normDesc(f.descricao))).sort((a, b) => (a.dia || 0) - (b.dia || 0)) };
+}
+
+function FixosLed({ fixos, custos, mes, onOpen, erro }) {
+  const { ativos, faltam } = useMemo(() => fixosPendentes(fixos, custos, mes), [fixos, custos, mes]);
+  const base = { display: "flex", alignItems: "center", gap: 12, borderRadius: 16, padding: "13px 16px", marginBottom: 16, cursor: "pointer" };
+  if (erro) {
+    return (
+      <div className="in" style={{ marginBottom: 16, padding: "11px 14px", borderRadius: 14, background: C.amberSoft, color: C.amber, fontSize: 12.5 }}>
+        Não consegui ler a lista de fixos (provavelmente falta liberar a coleção "recorrentes" nas regras do Firestore). O resto do app segue normal.
+      </div>
+    );
+  }
+  if (ativos.length === 0) {
+    return (
+      <div className="tap in" onClick={onOpen} style={{ ...base, border: `1px dashed ${C.border}`, background: C.card }}>
+        <span style={{ flex: 1, fontSize: 13, color: C.muted }}>Fixos do mês: monte a lista dos custos que se repetem todo mês.</span>
+        <span style={{ fontSize: 12, fontWeight: 700, color: C.lavender }}>Criar lista</span>
+      </div>
+    );
+  }
+  const tudo = faltam.length === 0;
+  const cor = tudo ? C.emerald : C.amber;
+  return (
+    <div className="tap in" onClick={onOpen} style={{ ...base, background: tudo ? C.emeraldSoft : C.card, boxShadow: tudo ? "none" : shadowSm }}>
+      <span style={{ width: 11, height: 11, borderRadius: 6, background: cor, boxShadow: `0 0 10px ${cor}`, flexShrink: 0 }} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 10.5, fontWeight: 700, color: C.muted, textTransform: "uppercase", letterSpacing: 0.5 }}>Fixos do mês</div>
+        <div style={{ fontSize: 14, fontWeight: 700, color: tudo ? C.emerald : C.ink }}>
+          {tudo ? `Os ${ativos.length} fixos já estão lançados` : `Faltam lançar ${faltam.length} de ${ativos.length}`}
+        </div>
+      </div>
+      <ChevronDown size={16} color={C.faint} style={{ transform: "rotate(-90deg)", flexShrink: 0 }} />
+    </div>
+  );
+}
+
+function FixosModal({ fixos, custos, mes, onLancar, onAdd, onUpdate, onRemove, onClose }) {
+  const [aba, setAba] = useState("mes");
+  const { ativos, faltam } = useMemo(() => fixosPendentes(fixos, custos, mes), [fixos, custos, mes]);
+  const vazio = { id: null, descricao: "", dia: "", valor: "", valorPago: "", fonte: "Varia", ativo: true };
+  const [f, setF] = useState(vazio);
+  const [busy, setBusy] = useState(false);
+  const lista = useMemo(() => [...fixos].sort((a, b) => (a.dia || 0) - (b.dia || 0) || a.descricao.localeCompare(b.descricao)), [fixos]);
+  const salvar = async (e) => {
+    e.preventDefault();
+    if (busy) return;
+    const dia = parseInt(f.dia, 10);
+    if (!f.descricao.trim() || !(dia >= 1 && dia <= 31)) { alert("Informe a descrição e o dia do mês (1 a 31)."); return; }
+    let valor = null;
+    if (String(f.valor).trim() !== "") {
+      valor = parseValorBR(f.valor);
+      if (!isValorValido(valor)) { alert("O valor precisa ser maior que zero (ou deixe em branco se varia)."); return; }
+    }
+    let valorPago = null;
+    if (String(f.valorPago).trim() !== "") {
+      valorPago = parseValorBR(f.valorPago);
+      if (!isValorValido(valorPago)) { alert("O valor pago esperado precisa ser maior que zero (ou deixe em branco)."); return; }
+    }
+    const payload = { descricao: f.descricao.trim(), dia, valor, valorPago, fonte: f.fonte === "Varia" ? "" : f.fonte, ativo: f.ativo !== false };
+    setBusy(true);
+    try { if (f.id) await onUpdate(f.id, payload); else await onAdd(payload); setF(vazio); } finally { setBusy(false); }
+  };
+  const iniciais = async () => {
+    if (busy) return;
+    if (!window.confirm(`Criar a lista inicial com ${FIXOS_INICIAIS.length} fixos? Você pode editar tudo depois.`)) return;
+    setBusy(true);
+    try { for (const x of FIXOS_INICIAIS) await onAdd({ ...x, ativo: true }); } finally { setBusy(false); }
+  };
+  const mini = { border: `1px solid ${C.border}`, background: C.page, color: C.muted, borderRadius: 9, padding: "6px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" };
+  return (
+    <Modal title="Fixos do mês" onClose={onClose}>
+      <div style={{ padding: "4px 0 24px" }}>
+        <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+          {[["mes", `Para lançar (${faltam.length})`], ["lista", "Gerenciar lista"]].map(([k, t]) => (
+            <button key={k} type="button" onClick={() => setAba(k)} style={{ border: `1px solid ${aba === k ? C.emerald : C.border}`, background: aba === k ? C.emeraldSoft : C.page, color: aba === k ? C.emerald : C.muted, borderRadius: 10, padding: "8px 14px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>{t}</button>
+          ))}
+        </div>
+        {aba === "mes" && (
+          <div>
+            {ativos.length === 0 ? (
+              <div style={{ color: C.muted, fontSize: 13.5, padding: "16px 0", textAlign: "center" }}>A lista está vazia. Abra "Gerenciar lista" para criar.</div>
+            ) : faltam.length === 0 ? (
+              <div style={{ display: "flex", alignItems: "center", gap: 8, color: C.emerald, fontSize: 13.5, fontWeight: 600, padding: "12px 0" }}><Check size={16} strokeWidth={2.6} /> Todos os {ativos.length} fixos de {monthLabel(mes)} já estão lançados.</div>
+            ) : faltam.map((f, i) => (
+              <div key={f.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 0", borderTop: i === 0 ? "none" : `1px solid ${C.border}` }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: C.ink }}>{f.descricao}</div>
+                  <div style={{ fontSize: 11.5, color: C.faint }}>dia {f.dia} · {f.fonte || "fonte varia"}</div>
+                </div>
+                <div style={{ textAlign: "right" }}>
+                  <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, fontWeight: 700, color: f.valor ? C.ink : C.faint }}>{f.valor ? fmtBRL(f.valor) : "valor varia"}</div>
+                  {f.valorPago ? <div style={{ fontSize: 11, color: C.emerald }}>paga {fmtBRL(f.valorPago)}</div> : null}
+                </div>
+                <button type="button" onClick={() => onLancar(f, false)} style={{ border: `1px solid ${C.border}`, background: C.page, color: C.muted, borderRadius: 10, padding: "8px 12px", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>Lançar</button>
+                <button type="button" onClick={() => onLancar(f, true)} style={{ border: `1px solid ${C.emerald}`, background: C.emeraldSoft, color: C.emerald, borderRadius: 10, padding: "8px 12px", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>✓ Pago hoje</button>
+              </div>
+            ))}
+          </div>
+        )}
+        {aba === "lista" && <div>
+        {lista.length === 0 && (
+          <div style={{ border: `1px dashed ${C.border}`, borderRadius: 14, padding: 18, textAlign: "center", color: C.muted, fontSize: 13.5, marginBottom: 16 }}>
+            Nenhum fixo ainda.
+            <div style={{ marginTop: 10 }}><button type="button" onClick={iniciais} disabled={busy} style={{ ...addBtnStyle, margin: "0 auto" }}>Criar lista inicial</button></div>
+          </div>
+        )}
+        {lista.map(x => (
+          <div key={x.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 0", borderBottom: `1px solid ${C.border}`, opacity: x.ativo === false ? 0.5 : 1 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: C.ink }}>{x.descricao}{x.ativo === false ? " · desativado" : ""}</div>
+              <div style={{ fontSize: 11.5, color: C.faint }}>dia {x.dia} · {x.valor ? fmtBRL(x.valor) : "valor varia"}{x.valorPago ? ` (paga ${fmtBRL(x.valorPago)})` : ""} · {x.fonte || "fonte varia"}</div>
+            </div>
+            <button type="button" style={mini} onClick={() => setF({ id: x.id, descricao: x.descricao, dia: String(x.dia), valor: x.valor ? fmtValorInput(x.valor) : "", valorPago: x.valorPago ? fmtValorInput(x.valorPago) : "", fonte: x.fonte || "Varia", ativo: x.ativo !== false })}>Editar</button>
+            <button type="button" style={mini} onClick={() => onUpdate(x.id, { ativo: x.ativo === false })}>{x.ativo === false ? "Ativar" : "Desativar"}</button>
+            <button type="button" style={{ ...mini, color: C.coral }} onClick={() => { if (window.confirm(`Excluir "${x.descricao}" da lista de fixos? Os custos já lançados não mudam.`)) onRemove(x.id); }}>Excluir</button>
+          </div>
+        ))}
+        <form onSubmit={salvar} style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginTop: 20 }}>
+          <div style={{ gridColumn: "span 2", fontSize: 12, fontWeight: 700, color: C.muted, textTransform: "uppercase", letterSpacing: 0.5 }}>{f.id ? "Editar fixo" : "Novo fixo"}</div>
+          <Field label="Descrição" span={2}><TextInput value={f.descricao} onChange={e => setF({ ...f, descricao: e.target.value })} /></Field>
+          <Field label="Dia do vencimento"><TextInput type="text" inputMode="numeric" placeholder="1 a 31" value={f.dia} onChange={e => setF({ ...f, dia: e.target.value.replace(/\D/g, "").slice(0, 2) })} /></Field>
+          <Field label="Valor previsto (vazio = varia)"><TextInput type="text" inputMode="decimal" placeholder="0,00" value={f.valor} onChange={e => setF({ ...f, valor: e.target.value })} /></Field>
+          <Field label="Valor pago esperado (ex.: com desconto)"><TextInput type="text" inputMode="decimal" placeholder="0,00" value={f.valorPago} onChange={e => setF({ ...f, valorPago: e.target.value })} /></Field>
+          <Field label="Fonte"><SelectInput options={["Varia", ...FONTES_FORM]} value={f.fonte} onChange={e => setF({ ...f, fonte: e.target.value })} /></Field>
+          <div style={{ display: "flex", gap: 10, alignItems: "flex-end" }}>
+            <button type="submit" disabled={busy} style={{ ...addBtnStyle, opacity: busy ? 0.7 : 1 }}><Check size={16} /> {f.id ? "Salvar" : "Adicionar"}</button>
+            {f.id && <button type="button" style={mini} onClick={() => setF(vazio)}>Cancelar</button>}
+          </div>
+        </form>
+        </div>}
+      </div>
+    </Modal>
+  );
+}
+
+const rotuloK = (v) => v >= 1000 ? (v / 1000).toFixed(1).replace(".", ",") + "k" : String(Math.round(v));
 function ProximoVencLed({ info, onOpen, entrada = false }) {
   const { item, texto, cor, nAbertos, faltaPagar } = info;
   return (
@@ -2032,7 +2205,7 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
       if (fc && !g.fontes.includes(fc)) g.fontes.push(fc);
       grupos.set(key, g);
     }
-    return [...grupos.values()].sort((a, b) => b.valor - a.valor).slice(0, 5);
+    return [...grupos.values()].sort((a, b) => b.valor - a.valor).slice(0, 7);
   }, [custos, mesAtual]);
   const topMax = Math.max(1, ...topCustos.map(c => c.valor));
 
@@ -2185,7 +2358,7 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
                 {porFonte.map((f, i) => (
                   <div key={f.name} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5 }}>
                     <span style={{ width: 9, height: 9, borderRadius: 3, background: fonteColor(f.name), flexShrink: 0 }} />
-                    <span style={{ color: C.ink, flex: 1 }}>{f.name}</span>
+                    <span style={{ color: C.ink, flex: 1, whiteSpace: "nowrap" }}>{f.name}</span>
                     <span style={{ fontSize: 10.5, color: C.faint, minWidth: 28, textAlign: "right" }}>{pctDe(f.value, porFonte)}</span>
                     <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: C.muted, fontSize: 12 }}>{hidden ? "•••" : fmtBRL(f.value)}</span>
                   </div>
@@ -2299,13 +2472,13 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
             <>
               <div style={{ width: "100%", flex: 1, minHeight: 200 }}>
                 <ResponsiveContainer width="100%" height="100%" minHeight={200}>
-                  <BarChart data={comparativo} barGap={3} margin={{ bottom: 4 }}>
+                  <BarChart data={comparativo} barGap={3} margin={{ top: 16, bottom: 4 }}>
                     <XAxis dataKey="fonte" interval={0} height={44}
                       tick={<WrapTick fmt={(v) => v.replace("Débito Automático", "Déb. Automático")} />} axisLine={{ stroke: C.border }} tickLine={false} />
                     <YAxis hide />
                     <Tooltip content={<RichTooltip modo="variacao" colorMap={{ Anterior: "#5C6485", Atual: "#E8434F" }} />} />
-                    <Bar dataKey="Anterior" fill="#5C6485" radius={[4, 4, 0, 0]} />
-                    <Bar dataKey="Atual" fill="url(#gPago)" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="Anterior" fill="#5C6485" radius={[4, 4, 0, 0]}><LabelList dataKey="Anterior" position="top" formatter={rotuloK} style={{ fontSize: 10, fill: C.faint }} /></Bar>
+                    <Bar dataKey="Atual" fill="url(#gPago)" radius={[4, 4, 0, 0]}><LabelList dataKey="Atual" position="top" formatter={rotuloK} style={{ fontSize: 10, fill: C.muted, fontWeight: 700 }} /></Bar>
                   </BarChart>
                 </ResponsiveContainer>
               </div>
@@ -2430,7 +2603,8 @@ function agruparDivididos(items) {
   }));
 }
 
-function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJump }) {
+function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJump, fixos = [], fixosErro = false, onAddFixo, onUpdateFixo, onRemoveFixo }) {
+  const [showFixos, setShowFixos] = useState(false);
   const [mesFiltro, setMesFiltro] = useState(currentMonth());
   const [fonteFiltro, setFonteFiltro] = useState("Todas");
   // Old records may still carry a fonte that is no longer offered (BB, plain "Transferência"); keep them filterable.
@@ -2480,6 +2654,16 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
       dataPagamento: c.dataPagamento || "", valorPrevisto: fmtValorInput(c.valorPrevisto),
       valorPago: fmtValorInput(c.valorPago), fonte: c.fonte, status: c.status, obs: c.obs || ""
     });
+    setShowForm(true);
+  };
+
+  // "Lançar" on a fixo: opens the normal form pre-filled (nothing is saved until the person saves).
+  const lancarFixo = (fx, pagoHoje = false) => {
+    setEditingId(null);
+    const pagoEsp = fx.valorPago || fx.valor || 0;
+    setForm({ ...blankCusto(mesFiltro), descricao: fx.descricao, vencimento: vencimentoDoFixo(fx, mesFiltro),
+      valorPrevisto: fx.valor ? fmtValorInput(fx.valor) : "", fonte: fx.fonte || FONTES[0],
+      ...(pagoHoje ? { status: "Pago", dataPagamento: todayISO(), valorPago: pagoEsp ? fmtValorInput(pagoEsp) : "" } : {}) });
     setShowForm(true);
   };
 
@@ -2649,6 +2833,8 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
         </div>
       )}
 
+      <FixosLed fixos={fixos} custos={custos} mes={mesFiltro} erro={fixosErro} onOpen={() => setShowFixos(true)} />
+
       {filtrados.length > 0 && totals.pendentes === 0 && totals.atrasados === 0 && (
         <div className="in" style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16, padding: "11px 14px", borderRadius: 14, background: C.emeraldSoft, color: C.emerald, fontSize: 13, fontWeight: 600 }}>
           <Check size={16} strokeWidth={2.6} /> {totals.pagos === 1 ? "O único custo lançado está pago." : `Todos os ${totals.pagos} custos lançados estão pagos.`}
@@ -2704,6 +2890,8 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
       )}
 
 
+      {showFixos && <FixosModal fixos={fixos} custos={custos} mes={mesFiltro} onLancar={(fx, pago) => { setShowFixos(false); lancarFixo(fx, pago); }} onAdd={onAddFixo} onUpdate={onUpdateFixo} onRemove={onRemoveFixo} onClose={() => setShowFixos(false)} />}
+
       {showForm && (
         <Modal
           title={editingId ? "Editar custo" : "Novo custo"}
@@ -2715,7 +2903,7 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
           }
         >
           <form id="custo-form" onSubmit={submit} style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, padding: "4px 0 24px" }}>
-            <Field label="Descrição / Categoria"><TextInput style={{gridColumn:"span 2"}} required value={form.descricao} onChange={e=>setForm({...form,descricao:e.target.value})} /></Field>
+            <Field label="Descrição / Categoria" span={2}><TextInput required value={form.descricao} onChange={e=>setForm({...form,descricao:e.target.value})} /></Field>
             <Field label="Vencimento"><TextInput type="date" required value={form.vencimento} onChange={e=>setForm({...form,vencimento:e.target.value})} /></Field>
             <Field label="Data Pagamento"><TextInput type="date" value={form.dataPagamento} onChange={e=>setForm({...form,dataPagamento:e.target.value})} /></Field>
             <Field label="Valor Previsto (R$)"><TextInput type="text" inputMode="decimal" placeholder="0,00" required value={form.valorPrevisto} onChange={e=>setForm({...form,valorPrevisto:e.target.value})} /></Field>
@@ -2734,7 +2922,7 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
                 return n;
               });
             }} /></Field>
-            <Field label="Observações"><TextArea rows={10} style={{gridColumn:"span 2", height: 260}} value={form.obs} onChange={e=>setForm({...form,obs:e.target.value})} /></Field>
+            <Field label="Observações" span={2}><TextArea rows={10} style={{ height: 260 }} value={form.obs} onChange={e=>setForm({...form,obs:e.target.value})} /></Field>
           </form>
         </Modal>
       )}
@@ -2962,7 +3150,7 @@ function ReceitasTab({ receitas, onAdd, onRemove, onUpdate, inicioContagem }) {
           }
         >
           <form id="receita-form" onSubmit={submit} style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, padding: "4px 0 24px" }}>
-            <Field label="Descrição / Origem"><TextInput style={{gridColumn:"span 2"}} required value={form.descricao} onChange={e => {
+            <Field label="Descrição / Origem" span={2}><TextInput required value={form.descricao} onChange={e => {
               const v = e.target.value;
               const sug = destinoPadraoReceita(v);
               // New receita only: suggest the usual destination until the person picks one by hand.
@@ -2982,7 +3170,7 @@ function ReceitasTab({ receitas, onAdd, onRemove, onUpdate, inicioContagem }) {
                 return n;
               });
             }} /></Field>
-            <Field label="Observações"><TextArea rows={10} style={{gridColumn:"span 2", height: 260}} value={form.obs} onChange={e=>setForm({...form,obs:e.target.value})} /></Field>
+            <Field label="Observações" span={2}><TextArea rows={10} style={{ height: 260 }} value={form.obs} onChange={e=>setForm({...form,obs:e.target.value})} /></Field>
           </form>
         </Modal>
       )}
@@ -3205,7 +3393,7 @@ function MonthDetailModal({ resumo, custos, receitas, onClose }) {
             {porFonte.map((f, i) => (
               <div key={f.name} style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12 }}>
                 <span style={{ width: 8, height: 8, borderRadius: 3, background: fonteColor(f.name), flexShrink: 0 }} />
-                <span style={{ color: C.ink, flex: 1 }}>{f.name}</span>
+                <span style={{ color: C.ink, flex: 1, whiteSpace: "nowrap" }}>{f.name}</span>
                 <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: C.muted, fontSize: 11.5 }}>{fmtBRL(f.value)}</span>
               </div>
             ))}
@@ -3264,7 +3452,7 @@ function DemandasTab({ demandas, onAdd, onRemove, onUpdate, onStatusChange, jump
     setEditingId(d.id);
     setForm({
       nome: d.nome, contato: d.contato || "", detalhes: d.detalhes || "",
-      prazo: d.prazo || "", prioridade: d.prioridade, status: d.status, obs: d.obs || ""
+      prazo: d.prazo || "", prioridade: d.prioridade, status: d.status, obs: d.obs || "", concluidaEm: d.concluidaEm || ""
     });
     setShowForm(true);
   };
@@ -3285,11 +3473,11 @@ function DemandasTab({ demandas, onAdd, onRemove, onUpdate, onStatusChange, jump
       if (editingId) {
         const antes = demandas.find(d => d.id === editingId);
         const extra = {};
-        if (antes && antes.status !== "Concluída" && form.status === "Concluída") extra.concluidaEm = todayISO();
+        if (antes && antes.status !== "Concluída" && form.status === "Concluída") extra.concluidaEm = form.concluidaEm || todayISO();
         else if (antes && antes.status === "Concluída" && form.status !== "Concluída") extra.concluidaEm = "";
         await onUpdate(editingId, { ...form, ...extra });
       } else {
-        await onAdd({ ...form, criadoEm: todayISO(), ...(form.status === "Concluída" ? { concluidaEm: todayISO() } : {}) });
+        await onAdd({ ...form, criadoEm: todayISO(), ...(form.status === "Concluída" ? { concluidaEm: form.concluidaEm || todayISO() } : { concluidaEm: "" }) });
       }
       setForm(blank());
       setEditingId(null);
@@ -3328,12 +3516,6 @@ function DemandasTab({ demandas, onAdd, onRemove, onUpdate, onStatusChange, jump
         </div>
         <ProgressBar pct={pctConcluido} />
         <div style={{ display: "flex", gap: 16, marginTop: 14, flexWrap: "wrap" }}>
-          {atrasadasDem > 0 && (
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <span style={{ width: 8, height: 8, borderRadius: "50%", background: C.coral }} />
-              <span style={{ fontSize: 12, color: C.coral, fontWeight: 700 }}>{atrasadasDem} {atrasadasDem === 1 ? "atrasada" : "atrasadas"}</span>
-            </div>
-          )}
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
             <span style={{ width: 8, height: 8, borderRadius: "50%", background: C.amber }} />
             <span style={{ fontSize: 12, color: C.muted }}>Pendentes <strong style={{ color: C.ink }}>{resumo.pendente}</strong></span>
@@ -3346,6 +3528,12 @@ function DemandasTab({ demandas, onAdd, onRemove, onUpdate, onStatusChange, jump
             <span style={{ width: 8, height: 8, borderRadius: "50%", background: C.emerald }} />
             <span style={{ fontSize: 12, color: C.muted }}>Concluídas <strong style={{ color: C.ink }}>{resumo.concluida}</strong></span>
           </div>
+          {atrasadasDem > 0 && (
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ width: 8, height: 8, borderRadius: "50%", background: C.coral }} />
+              <span style={{ fontSize: 12, color: C.coral, fontWeight: 700 }}>{atrasadasDem} {atrasadasDem === 1 ? "dos abertos está atrasado" : "dos abertos estão atrasados"}</span>
+            </div>
+          )}
         </div>
         {porPrioridade.length > 1 && (
           <div style={{ display: "flex", gap: 16, marginTop: 10 }}>
@@ -3467,6 +3655,7 @@ function DemandasTab({ demandas, onAdd, onRemove, onUpdate, onStatusChange, jump
             <Field label="Prazo"><TextInput type="date" value={form.prazo} onChange={e=>setForm({...form,prazo:e.target.value})} /></Field>
             <Field label="Prioridade"><SelectInput options={PRIORIDADES} value={form.prioridade} onChange={e=>setForm({...form,prioridade:e.target.value})} /></Field>
             <Field label="Status"><SelectInput options={STATUS_DEMANDA} value={form.status} onChange={e=>setForm({...form,status:e.target.value})} /></Field>
+            {form.status === "Concluída" && <Field label="Concluída em"><TextInput type="date" value={form.concluidaEm || ""} onChange={e=>setForm({...form,concluidaEm:e.target.value})} /></Field>}
             <Field label="Detalhes" span={2}><TextInput value={form.detalhes} onChange={e=>setForm({...form,detalhes:e.target.value})} /></Field>
             <Field label="Observações" span={2}><TextArea rows={10} style={{ height: 260 }} value={form.obs} onChange={e=>setForm({...form,obs:e.target.value})} /></Field>
           </form>
