@@ -1870,8 +1870,8 @@ function FixosLed({ fixos, custos, mes, onOpen, erro }) {
   if (ativos.length === 0) {
     return (
       <div className="tap in" onClick={onOpen} style={{ ...base, border: `1px dashed ${C.border}`, background: C.card }}>
-        <span style={{ flex: 1, fontSize: 13, color: C.muted }}>Fixos do mês: monte a lista dos custos que se repetem todo mês.</span>
-        <span style={{ fontSize: 12, fontWeight: 700, color: C.lavender }}>Criar lista</span>
+        <span style={{ flex: 1, fontSize: 13, color: C.muted }}>Fixos do mês: a lista inicial já está pronta ({FIXOS_INICIAIS.length} fixos). Toque para criar.</span>
+        <span style={{ fontSize: 12, fontWeight: 700, color: C.lavender }}>Abrir</span>
       </div>
     );
   }
@@ -1892,8 +1892,8 @@ function FixosLed({ fixos, custos, mes, onOpen, erro }) {
 }
 
 function FixosModal({ fixos, custos, mes, onLancar, onAdd, onUpdate, onRemove, onClose }) {
-  const [aba, setAba] = useState("mes");
   const { ativos, faltam } = useMemo(() => fixosPendentes(fixos, custos, mes), [fixos, custos, mes]);
+  const [aba, setAba] = useState("mes");
   const vazio = { id: null, descricao: "", dia: "", valor: "", valorPago: "", fonte: "Varia", ativo: true };
   const [f, setF] = useState(vazio);
   const [busy, setBusy] = useState(false);
@@ -1935,7 +1935,11 @@ function FixosModal({ fixos, custos, mes, onLancar, onAdd, onUpdate, onRemove, o
         {aba === "mes" && (
           <div>
             {ativos.length === 0 ? (
-              <div style={{ color: C.muted, fontSize: 13.5, padding: "16px 0", textAlign: "center" }}>A lista está vazia. Abra "Gerenciar lista" para criar.</div>
+              <div style={{ border: `1px dashed ${C.border}`, borderRadius: 14, padding: 18, color: C.muted, fontSize: 13.5 }}>
+                <div style={{ marginBottom: 8 }}>A lista inicial já está pronta, é só criar com um toque:</div>
+                <div style={{ fontSize: 12.5, color: C.faint, lineHeight: 1.6, marginBottom: 12 }}>{FIXOS_INICIAIS.map(x => x.descricao).join(" · ")}</div>
+                <button type="button" onClick={iniciais} disabled={busy} style={{ ...addBtnStyle, opacity: busy ? 0.7 : 1 }}>Criar lista inicial</button>
+              </div>
             ) : faltam.length === 0 ? (
               <div style={{ display: "flex", alignItems: "center", gap: 8, color: C.emerald, fontSize: 13.5, fontWeight: 600, padding: "12px 0" }}><Check size={16} strokeWidth={2.6} /> Todos os {ativos.length} fixos de {monthLabel(mes)} já estão lançados.</div>
             ) : faltam.map((f, i) => (
@@ -2343,11 +2347,11 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
             <div style={{ color: C.muted, fontSize: 13, padding: "16px 0", textAlign: "center" }}>Sem custos lançados neste mês.</div>
           ) : (
             <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-              <div style={{ width: 130, height: 130, flexShrink: 0, position: "relative" }}>
+              <div style={{ width: 118, height: 118, flexShrink: 0, position: "relative" }}>
                 <DonutTotal total={porFonte.reduce((t, f) => t + f.value, 0)} hidden={hidden} />
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
-                    <Pie data={porFonte} dataKey="value" nameKey="name" innerRadius={36} outerRadius={60} paddingAngle={2}>
+                    <Pie data={porFonte} dataKey="value" nameKey="name" innerRadius={33} outerRadius={54} paddingAngle={2}>
                       {porFonte.map((f) => <Cell key={f.name} fill={fonteColor(f.name)} />)}
                     </Pie>
                     <Tooltip content={<RichTooltip />} />
@@ -2356,11 +2360,11 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 6, flex: 1, minWidth: 120 }}>
                 {porFonte.map((f, i) => (
-                  <div key={f.name} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5 }}>
+                  <div key={f.name} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5 }}>
                     <span style={{ width: 9, height: 9, borderRadius: 3, background: fonteColor(f.name), flexShrink: 0 }} />
                     <span style={{ color: C.ink, flex: 1, whiteSpace: "nowrap" }}>{f.name}</span>
-                    <span style={{ fontSize: 10.5, color: C.faint, minWidth: 28, textAlign: "right" }}>{pctDe(f.value, porFonte)}</span>
-                    <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: C.muted, fontSize: 12 }}>{hidden ? "•••" : fmtBRL(f.value)}</span>
+                    <span style={{ fontSize: 10.5, color: C.faint, minWidth: 24, textAlign: "right" }}>{pctDe(f.value, porFonte)}</span>
+                    <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: C.muted, fontSize: 11.5 }}>{hidden ? "•••" : fmtBRL(f.value)}</span>
                   </div>
                 ))}
                 {meiosMes.length > 0 && <div style={{ fontSize: 10.5, color: C.faint, marginTop: 2 }}>{meiosMes.join(" · ")}</div>}
@@ -2375,11 +2379,11 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
             <div style={{ color: C.muted, fontSize: 13, padding: "16px 0", textAlign: "center" }}>Sem receitas lançadas neste mês.</div>
           ) : (
             <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-              <div style={{ width: 130, height: 130, flexShrink: 0, position: "relative" }}>
+              <div style={{ width: 118, height: 118, flexShrink: 0, position: "relative" }}>
                 <DonutTotal total={porCategoria.reduce((t, f) => t + f.value, 0)} hidden={hidden} />
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
-                    <Pie data={porCategoria} dataKey="value" nameKey="name" innerRadius={36} outerRadius={60} paddingAngle={2}>
+                    <Pie data={porCategoria} dataKey="value" nameKey="name" innerRadius={33} outerRadius={54} paddingAngle={2}>
                       {porCategoria.map((f) => <Cell key={f.name} fill={catColor(f.name)} />)}
                     </Pie>
                     <Tooltip content={<RichTooltip />} />
