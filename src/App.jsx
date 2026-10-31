@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from "react";
 import {
   Plus, Trash2, X, Wallet, TrendingUp, TrendingDown, ClipboardList,
   Calendar, Check, AlertCircle, Clock, Filter, ChevronDown, PiggyBank,
-  Home as HomeIcon, ArrowRight, Download, Pencil, Eye, EyeOff
+  Home as HomeIcon, ArrowRight, Download, Pencil, Eye, EyeOff, Sun, Moon
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import { auth, db } from "./firebase.js";
@@ -49,6 +49,8 @@ const notasMeios = (lista) => {
   return Object.entries(g).map(([k, m]) => `${k} inclui ${m.join(" e ")}`);
 };
 const opcoesFonte = (atual) => (atual && !FONTES_FORM.includes(atual)) ? [...FONTES_FORM, atual] : FONTES_FORM;
+// Só na apresentação: custo não pago cujo vencimento já passou conta como "Atrasado" (o dado salvo não muda).
+const statusEfetivo = (c) => (c.status !== "Pago" && c.vencimento && c.vencimento < localISO() ? "Atrasado" : c.status);
 const STATUS_CUSTO = ["Pago","Pendente","Atrasado"];
 const STATUS_RECEITA = ["Recebido","Parcial","Pendente"];
 const PRIORIDADES = ["Alta","Média","Baixa"];
@@ -133,7 +135,33 @@ function parseQuickEntry(rawText) {
       text = text.replace(new RegExp(diaMatch[0].replace(/\s+/g, "\\s+"), "i"), " ");
     }
   }
+  // Horário ("10:00", "10h", "10h30", "às 10") — nunca é valor em R$. Sai do texto
+  // antes de procurar valores e, em demanda, vai para os Detalhes.
+  let hora = "";
+  const horaMatch = text.match(/\b(\d{1,2})\s*(?::|h)\s*(\d{2})?\b(?!\s*(?:reais|r\$))/i) || text.match(/\bàs\s+(\d{1,2})\b()/i);
+  if (horaMatch && +horaMatch[1] <= 23 && (!horaMatch[2] || +horaMatch[2] <= 59)) {
+    hora = `${horaMatch[1].padStart(2, "0")}:${horaMatch[2] || "00"}`;
+    text = text.replace(horaMatch[0], " ");
+  }
+  // Mês por extenso: "19 de novembro", "dia 19 ... novembro", "em novembro" (sem dia).
+  const MESES_ABREV = ["janeiro","fevereiro","marco","abril","maio","junho","julho","agosto","setembro","outubro","novembro","dezembro"];
+  let semDiaNoMes = false;
+  if (!fullDate) {
+    const mm = lower.normalize("NFD").replace(/[\u0300-\u036f]/g, "").match(/\b(janeiro|fevereiro|marco|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)\b/);
+    if (mm) {
+      const mi = MESES_ABREV.indexOf(mm[1]);
+      const dm = lower.match(/\b(?:dia\s+)?(\d{1,2})\s+de\b/) || lower.match(/\bdia\s+(\d{1,2})\b/);
+      const now = new Date(); let ano = now.getFullYear();
+      if (mi < now.getMonth()) ano += 1;
+      if (dm) {
+        dataStr = `${ano}-${String(mi + 1).padStart(2, "0")}-${String(+dm[1]).padStart(2, "0")}`;
+        text = text.replace(new RegExp("\\b(?:dia\\s+)?" + dm[1] + "(?:\\s+de)?(?![\\d])", "i"), " ");
+      } else { semDiaNoMes = true; }
+      text = text.replace(new RegExp("\\b" + mm[1].replace("marco", "mar[çc]o") + "\\b", "i"), " ");
+    }
+  }
   if (!dataStr) dataStr = localISO();
+  const textoSemHora = text;
 
   // "salário" alone suggests income ("recebi meu salário"), but "conta
   // salário" is just the fonte name — strip recognized fonte phrases first so
@@ -144,7 +172,17 @@ function parseQuickEntry(rawText) {
   const jaRecebido = /\breceb/i.test(lowerSemFonte);
   const jaPago = /\bpagu?ei\b|\bpago\b|\bfeito\b|\bfeita\b|\bquitei\b|\bquitado\b|\bliquidei\b|\bliquidado\b|\bfiz\b/i.test(lowerSemFonte);
   const status = isReceita ? (jaRecebido ? "Recebido" : "Pendente") : (jaPago ? "Pago" : "Pendente");
-  const tipo = isReceita ? "receita" : "custo";
+  // Demanda = compromisso/tarefa: palavra de agenda e NENHUM sinal de dinheiro
+  // (R$, "reais", fonte de pagamento, "paguei/recebi"). Ex.: "consulta médica 19/11 10:00".
+  const temDinheiro = /r\$|\breais\b|\bvalor\b/i.test(lower) || FONTE_KEYWORDS.some(({ re }) => re.test(lower)) || jaPago || jaRecebido;
+  const palavraAgenda = /\b(consulta|exame|retorno|agendar|agende|agendamento|marcar|marque|reuni[ãa]o|entrevista|lembrar|lembrete|ligar|providenciar|renovar|dentista|m[ée]dic[oa]|vistoria|ensaio|show|compromisso|demanda|tarefa)\b/i.test(lower);
+  const valoresSoltos = [...text.matchAll(/\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d+(?:,\d{1,2})?/g)];
+  const isDemanda = palavraAgenda && !temDinheiro && !isReceita && valoresSoltos.length === 0;
+  const tipo = isDemanda ? "demanda" : isReceita ? "receita" : "custo";
+  if (isDemanda) {
+    const nome = text.replace(/(?<![\p{L}\d])(no|na|em|para|dia|de|do|da|às|as|à)(?![\p{L}\d])/giu, " ").replace(/[,.]/g, " ").replace(/\s+/g, " ").trim();
+    return [{ tipo, descricao: (nome || text.trim()).toUpperCase(), valor: 0, data: semDiaNoMes ? "" : dataStr, status: "Pendente", fonte: "", hora }];
+  }
 
   // The dot-grouped form only applies when a ".XXX" group actually follows
   // (the "+" below, not "*") — otherwise a plain 4+ digit run like "2675" or
@@ -262,6 +300,12 @@ const INICIO_KEY = "cf_inicio_contagem";
 // Real receitas only started being logged in September 2026, so earlier months
 // would distort the yearly balance — that's the default until changed.
 const INICIO_PADRAO = "2026-09";
+const TEMA_KEY = "cf_tema";   // "escuro" (default) | "claro" | "auto"
+const lerTemaPref = () => { try { const v = localStorage.getItem(TEMA_KEY); return v === "claro" || v === "auto" ? v : "escuro"; } catch (e) { return "escuro"; } };
+const salvarTemaPref = (v) => { try { localStorage.setItem(TEMA_KEY, v); } catch (e) { /* storage unavailable — choice just won't persist */ } };
+const temaEfetivo = (pref) => pref === "auto"
+  ? ((typeof window !== "undefined" && window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches) ? "claro" : "escuro")
+  : pref;
 const lerInicioContagem = () => { try { return localStorage.getItem(INICIO_KEY) || INICIO_PADRAO; } catch (e) { return INICIO_PADRAO; } };
 const salvarInicioContagem = (v) => { try { localStorage.setItem(INICIO_KEY, v); } catch (e) { /* storage unavailable — setting just won't persist */ } };
 // Index (0–11) of the first counted month for the given year; 0 when nothing
@@ -440,16 +484,49 @@ const C = {
   coral: "#FF5A68", coralSoft: "#FF5A682E", coralDeep: "#FF8B94", coralLight: "#FF9AA3",
   amber: "#FFB929", amberSoft: "#FFB9292E", amberDeep: "#FFCB66", amberLight: "#FFCB66",
   lavender: "#9AA5D1",
+  // Text and chips that sit directly on the page wallpaper (outside any card). Same as the card tokens in the dark theme.
+  pageInk: "#F3F5FA", pageMuted: "#8B93B5", pageFaint: "#5C6485", pageChip: "#252B45",
 };
-const shadowSm = "0 1px 3px rgba(0,0,0,0.35), 0 0 0 1px rgba(255,255,255,0.04)";
-const shadowMd = "0 10px 30px rgba(0,0,0,0.45), 0 0 0 1px rgba(255,255,255,0.05)";
+let shadowSm = "0 1px 3px rgba(0,0,0,0.35), 0 0 0 1px rgba(255,255,255,0.04)";
+let shadowMd = "0 10px 30px rgba(0,0,0,0.45), 0 0 0 1px rgba(255,255,255,0.05)";
+// Themes. "escuro" is the app's identity and the default. "claro": cards, text and accents all light
+// (the Saldo card on Início keeps its dark gradient in both themes).
+const C_ESCURO = { ...C, gradOut: ["#FF7A85", "#E8434F"], gradIn: ["#2CF0BD", "#00B98A"] };
+const PAL_OUT_ESCURO = ["#FF5A68", "#FF8A3D", "#FFC53D", "#F472B6", "#A78BFA", "#38BDF8", "#2DD4BF", "#9AA5D1"];
+const PAL_IN_ESCURO = ["#00E0A8", "#22D3EE", "#4FA3FF", "#B5E655", "#818CF8", "#FDE047", "#F0ABFC", "#86EFAC"];
+// Claro: tons mais calmos e maduros (menos saturados), ainda bem distintos entre si.
+const PAL_OUT_CLARO = ["#D9606A", "#DE8A55", "#D9AE4A", "#C879A0", "#8C82C9", "#5E9FC4", "#4FA99B", "#8E97B8"];
+const PAL_IN_CLARO = ["#2EA98A", "#4A9DB5", "#5B7FD0", "#9DBB56", "#C98A4B", "#D2B94E", "#B98AC4", "#E07A8A"];
+const SHADOWS_ESCURO = [shadowSm, shadowMd];
+const TEMAS = {
+  escuro: {},
+  claro: {
+    page: "#EEF1F8", card: "#FFFFFF", ink: "#141B34", inkSoft: "#3A4466", muted: "#5A6385", faint: "#7A83A3", border: "#DCE1EE",
+    emerald: "#00A67E", emeraldSoft: "#00A67E24", emeraldDeep: "#008A69", emeraldLight: "#00A67E",
+    coral: "#E0414F", coralSoft: "#E0414F22", coralDeep: "#C73341", coralLight: "#E0414F",
+    amber: "#C98300", amberSoft: "#C9830022", amberDeep: "#A86C00", amberLight: "#C98300", lavender: "#6B76A8",
+    pageInk: "#141B34", pageMuted: "#5A6385", pageFaint: "#7A83A3", pageChip: "#DCE1EE",
+    gradOut: ["#E5808A", "#D9606A"], gradIn: ["#4DBFA2", "#2EA98A"],
+  },
+};
+function aplicarTema(modo) {
+  Object.assign(C, C_ESCURO, TEMAS[modo] || {});
+  const claro = modo === "claro";
+  PALETTE_OUT = claro ? PAL_OUT_CLARO : PAL_OUT_ESCURO;
+  PALETTE_IN = claro ? PAL_IN_CLARO : PAL_IN_ESCURO;
+  shadowSm = claro ? "0 1px 2px rgba(20,27,52,0.08), 0 0 0 1px rgba(20,27,52,0.05)" : SHADOWS_ESCURO[0];
+  shadowMd = claro ? "0 10px 28px rgba(20,27,52,0.14), 0 0 0 1px rgba(20,27,52,0.06)" : SHADOWS_ESCURO[1];
+  // Style objects built once at load: refresh the parts that use the palette.
+  Object.assign(inputStyle, { border: "1px solid " + C.border, background: C.card, color: C.ink });
+  Object.assign(monthNavBtnStyle, { border: `1px solid ${C.border}`, background: C.card, color: C.ink });
+  Object.assign(menuItemStyle, { color: C.ink });
+}
 // Closed tonal system: every chart color is a shade of emerald/amber/coral/ink —
 // no unrelated hues, so multi-slice charts still read as "one app", not a mix.
 // Saídas (custos): tons quentes primeiro; Entradas (receitas): tons frios/verdes primeiro.
 // Cada paleta tem 8 cores bem distintas entre si, para nenhuma fatia se confundir com outra.
-const PALETTE_OUT = ["#FF5A68", "#FF8A3D", "#FFC53D", "#F472B6", "#A78BFA", "#38BDF8", "#2DD4BF", "#9AA5D1"];
-const PALETTE_IN = ["#00E0A8", "#22D3EE", "#4FA3FF", "#B5E655", "#818CF8", "#FDE047", "#F0ABFC", "#86EFAC"];
-const CHART_PALETTE = PALETTE_OUT;
+let PALETTE_OUT = ["#FF5A68", "#FF8A3D", "#FFC53D", "#F472B6", "#A78BFA", "#38BDF8", "#2DD4BF", "#9AA5D1"];
+let PALETTE_IN = ["#00E0A8", "#22D3EE", "#4FA3FF", "#B5E655", "#818CF8", "#FDE047", "#F0ABFC", "#86EFAC"];
 // Cor fixa por fonte: "Conta Salário" tem sempre a mesma cor em qualquer gráfico ou mês.
 const fonteColor = (name) => PALETTE_OUT[Math.max(0, FONTES.indexOf(contaDaFonte(name))) % PALETTE_OUT.length];
 const STATUS_ACCENT = {
@@ -710,7 +787,7 @@ const NAV_ITEMS = [
 
 // Global action, not a screen: reachable from any tab, opens a sheet on top
 // of whatever the person is doing, and returns them there once confirmed.
-function QuickAddFab({ onAddCusto, onAddReceita, demandas = [], onResolveDemanda }) {
+function QuickAddFab({ onAddCusto, onAddReceita, onAddDemanda, demandas = [], onResolveDemanda }) {
   const [open, setOpen] = useState(false);
   const [step, setStep] = useState("input");
   const [text, setText] = useState("");
@@ -731,14 +808,14 @@ function QuickAddFab({ onAddCusto, onAddReceita, demandas = [], onResolveDemanda
       const matched = matchDemanda(d.descricao, demandas);
       return matched ? { ...d, matchedDemandaId: matched.id, matchedDemandaNome: matched.nome, resolverDemanda: true } : d;
     });
-    if (parsed.every(p => !isValorValido(p.valor))) {
+    if (parsed.every(p => p.tipo !== "demanda" && !isValorValido(p.valor))) {
       const continuar = window.confirm(
         "Não encontrei nenhum valor no texto digitado. Quer continuar e preencher o valor manualmente na próxima tela?"
       );
       if (!continuar) return;
     }
     // Amounts go into the editable field in Brazilian format ("2.675,00").
-    setDraft(parsed.map(d => ({ ...d, valor: isValorValido(d.valor) ? fmtValorInput(d.valor) : "" })));
+    setDraft(parsed.map(d => ({ ...d, valor: isValorValido(d.valor) ? fmtValorInput(d.valor) : "", prioridade: "Média" })));
     setStep("review");
   };
 
@@ -753,13 +830,13 @@ function QuickAddFab({ onAddCusto, onAddReceita, demandas = [], onResolveDemanda
   const salvar = async () => {
     if (saving || !draft || draft.length === 0) return;
     if (draft.some(d => !d.descricao || !d.descricao.trim())) { alert("Preencha a descrição de todos os lançamentos."); return; }
-    if (draft.some(d => !d.data)) { alert("Preencha a data de todos os lançamentos."); return; }
+    if (draft.some(d => d.tipo !== "demanda" && !d.data)) { alert("Preencha a data de todos os lançamentos."); return; }
     const valores = draft.map(d => parseValorBR(d.valor));
-    if (valores.some(v => !isValorValido(v))) {
+    if (draft.some((d, i) => d.tipo !== "demanda" && !isValorValido(valores[i]))) {
       alert("Cada lançamento precisa de um valor maior que zero.");
       return;
     }
-    if (!confirmDateSanity(draft[0].data, draft[0].tipo === "custo" ? "data de vencimento" : "data de recebimento")) return;
+    if (draft[0].data && !confirmDateSanity(draft[0].data, draft[0].tipo === "custo" ? "data de vencimento" : draft[0].tipo === "demanda" ? "prazo" : "data de recebimento")) return;
     setSaving(true);
     try {
       for (let i = 0; i < draft.length; i++) {
@@ -768,7 +845,13 @@ function QuickAddFab({ onAddCusto, onAddReceita, demandas = [], onResolveDemanda
         const mes = d.data.slice(0, 7);
         const anoNum = parseInt(d.data.slice(0, 4), 10);
         const status = d.status || "Pendente";
-        if (d.tipo === "custo") {
+        if (d.tipo === "demanda") {
+          await onAddDemanda({
+            nome: d.descricao, contato: "",
+            detalhes: d.hora ? `Horário: ${d.hora}` : "",
+            prazo: d.data || "", prioridade: d.prioridade || "Média", status: "Pendente", obs: "", criadoEm: todayISO(), concluidaEm: ""
+          });
+        } else if (d.tipo === "custo") {
           await onAddCusto({
             mes, ano: anoNum, descricao: d.descricao,
             vencimento: d.data, dataPagamento: status === "Pago" ? d.data : "",
@@ -868,20 +951,25 @@ function QuickAddFab({ onAddCusto, onAddReceita, demandas = [], onResolveDemanda
                 )}
                 <Field label="Tipo">
                   <div style={{ display: "flex", gap: 8 }}>
-                    {["custo", "receita"].map(t => (
+                    {["custo", "receita", "demanda"].map(t => (
                       <button key={t} type="button" onClick={() => updateDraft(i, { tipo: t })} style={{
                         flex: 1, padding: "9px 0", borderRadius: 10, border: `1px solid ${d.tipo === t ? C.emerald : C.border}`,
                         background: d.tipo === t ? C.emeraldSoft : C.card, color: d.tipo === t ? C.emerald : C.muted,
                         fontWeight: 700, fontSize: 12.5, cursor: "pointer"
-                      }}>{t === "custo" ? "Custo" : "Receita"}</button>
+                      }}>{t === "custo" ? "Custo" : t === "receita" ? "Receita" : "Demanda"}</button>
                     ))}
                   </div>
                 </Field>
-                <Field label="Valor (R$)"><TextInput type="text" inputMode="decimal" placeholder="0,00" value={d.valor} onChange={e => updateDraft(i, { valor: e.target.value })} /></Field>
+                {d.tipo === "demanda"
+                  ? <Field label="Horário (opcional)"><TextInput type="time" value={d.hora || ""} onChange={e => updateDraft(i, { hora: e.target.value })} /></Field>
+                  : <Field label="Valor (R$)"><TextInput type="text" inputMode="decimal" placeholder="0,00" value={d.valor} onChange={e => updateDraft(i, { valor: e.target.value })} /></Field>}
                 <Field label="Descrição" span={2}><TextInput value={d.descricao} onChange={e => updateDraft(i, { descricao: e.target.value })} /></Field>
-                <Field label={d.tipo === "custo" ? "Vencimento" : "Recebimento"}>
+                <Field label={d.tipo === "custo" ? "Vencimento" : d.tipo === "demanda" ? "Prazo / data" : "Recebimento"}>
                   <TextInput type="date" value={d.data} onChange={e => updateDraft(i, { data: e.target.value })} />
                 </Field>
+                {d.tipo === "demanda" ? (
+                  <Field label="Prioridade" span={2}><SelectInput options={PRIORIDADES} value={d.prioridade || "Média"} onChange={e => updateDraft(i, { prioridade: e.target.value })} /></Field>
+                ) : (<>
                 <Field label={d.tipo === "custo" ? "Fonte de Pagamento" : "Conta de Destino"}>
                   <SelectInput options={opcoesFonte(d.fonte)} value={d.fonte || (d.tipo === "custo" ? FONTES[0] : (destinoPadraoReceita(d.descricao) || FONTES[1]))} onChange={e => updateDraft(i, { fonte: e.target.value })} />
                   {d.fonte === "Transferência" && <div style={{ fontSize: 11, color: C.amber, marginTop: 4 }}>Escolha de qual conta saiu: Transferência (Corrente) ou (Salário).</div>}
@@ -889,6 +977,7 @@ function QuickAddFab({ onAddCusto, onAddReceita, demandas = [], onResolveDemanda
                 <Field label="Status">
                   <SelectInput options={d.tipo === "custo" ? STATUS_CUSTO : STATUS_RECEITA} value={d.status || "Pendente"} onChange={e => updateDraft(i, { status: e.target.value })} />
                 </Field>
+                </>)}
                 {d.matchedDemandaId && (
                   <label style={{
                     gridColumn: "span 2", display: "flex", alignItems: "center", gap: 8,
@@ -961,7 +1050,7 @@ function LoginScreen({ onLogin, error, loading }) {
       <style>{`@import url('https://fonts.googleapis.com/css2?family=Fraunces:wght@600;700&family=Inter:wght@400;500;600;700&display=swap');`}</style>
       <div style={{ marginBottom: 28, textAlign: "center" }}>
         <div style={{ fontFamily: "'Fraunces', serif", fontSize: 14, color: C.lavender, marginBottom: 4 }}>Livro-Razão</div>
-        <div style={{ fontFamily: "'Fraunces', serif", fontSize: 28, fontWeight: 700, color: "#F3F5FA" }}>Controle Financeiro</div>
+        <div style={{ fontFamily: "'Fraunces', serif", fontSize: 28, fontWeight: 700, color: "#F3F5FA" }}>Pauta Tutti</div>
       </div>
       <form onSubmit={submit} style={{
         background: C.card, borderRadius: 20, padding: "26px 22px", width: "100%", maxWidth: 360,
@@ -987,6 +1076,7 @@ function LoginScreen({ onLogin, error, loading }) {
   );
 }
 export default function App() {
+  useEffect(() => { document.title = "Pauta Tutti"; }, []);
   const [user, setUser] = useState(undefined); // undefined = checking, null = logged out
   const [authError, setAuthError] = useState("");
   const [authLoading, setAuthLoading] = useState(false);
@@ -997,6 +1087,10 @@ export default function App() {
   const [fixosErro, setFixosErro] = useState(false);
   const [loadedFlags, setLoadedFlags] = useState({ custos: false, receitas: false, demandas: false });
   const [tab, setTab] = useState("dashboard");
+  const [temaPref, setTemaPref] = useState(lerTemaPref);
+  const temaAtual = temaEfetivo(temaPref);
+  aplicarTema(temaAtual);   // before anything renders, so every C.* below already reads the right palette
+  const escolherTema = (v) => { setTemaPref(v); salvarTemaPref(v); };
   const [inicioContagem, setInicioContagem] = useState(lerInicioContagem);
   const mudarInicioContagem = (v) => { setInicioContagem(v); salvarInicioContagem(v); };
   const [jumpTarget, setJumpTarget] = useState(null);
@@ -1184,15 +1278,16 @@ export default function App() {
   const hojeLabel = `${new Date().getDate()} de ${MESES[new Date().getMonth()].toLowerCase()}`;
 
   return (
-    <div style={{ minHeight: "100vh", background: C.page, fontFamily: "'Inter', sans-serif", paddingBottom: 150 }}>
+    <div key={temaAtual} style={{ minHeight: "100vh", background: C.page, fontFamily: "'Inter', sans-serif", paddingBottom: 150 }}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Fraunces:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@500;600;700&display=swap');
         * { box-sizing: border-box; }
-        body { margin: 0; }
+        body { margin: 0; background: ${C.page}; }
+        :root { color-scheme: ${temaAtual === "claro" ? "light" : "dark"}; }
         @keyframes slideUp { from { transform: translateY(24px); opacity: 0 } to { transform: translateY(0); opacity: 1 } }
         @keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }
         ::-webkit-scrollbar { width: 8px; height: 8px; }
-        ::-webkit-scrollbar-thumb { background: #2A3150; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb { background: ${C.border}; border-radius: 4px; }
         button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid ${C.emerald}; outline-offset: 1px; }
         .tap { transition: transform .15s cubic-bezier(.34,1.56,.64,1), box-shadow .15s ease, filter .15s ease; }
         @media (hover: hover) and (pointer: fine) {
@@ -1235,11 +1330,19 @@ export default function App() {
                 </span>
               </div>
               <div style={{ fontFamily: "'Fraunces', serif", fontWeight: 700, fontSize: 22, color: C.ink, marginTop: 2 }}>
-                Controle Financeiro
+                Pauta Tutti
               </div>
             </div>
           </div>
-          <div style={{ position: "relative" }}>
+          <div style={{ position: "relative", display: "flex", alignItems: "center", gap: 8 }}>
+            <button className="tap" onClick={() => escolherTema(temaAtual === "claro" ? "escuro" : "claro")}
+              aria-label={temaAtual === "claro" ? "Mudar para o tema escuro" : "Mudar para o tema claro"}
+              style={{
+                width: 40, height: 40, borderRadius: 12, border: `1px solid ${C.border}`, background: C.card,
+                boxShadow: shadowSm, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer"
+              }}>
+              {temaAtual === "claro" ? <Moon size={18} color={C.ink} /> : <Sun size={18} color={C.ink} />}
+            </button>
             <button className="tap" onClick={() => setMenuOpen(o => !o)} style={{
               width: 40, height: 40, borderRadius: 12, border: `1px solid ${C.border}`, background: C.card,
               boxShadow: shadowSm, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer"
@@ -1265,6 +1368,13 @@ export default function App() {
                     <Download size={15} /> Exportar Excel
                   </button>
                   <div style={{ height: 1, background: C.border, margin: "4px 6px" }} />
+                  <div style={{ padding: "6px 8px 4px", fontSize: 10.5, fontWeight: 700, color: C.muted, textTransform: "uppercase", letterSpacing: 0.5 }}>Tema</div>
+                  <div style={{ display: "flex", gap: 4, padding: "0 4px 6px" }}>
+                    {[["escuro", "Escuro"], ["claro", "Claro"], ["auto", "Auto"]].map(([k, t]) => (
+                      <button key={k} type="button" onClick={() => escolherTema(k)} style={{ flex: 1, border: `1px solid ${temaPref === k ? C.emerald : C.border}`, background: temaPref === k ? C.emeraldSoft : "transparent", color: temaPref === k ? C.emerald : C.muted, borderRadius: 9, padding: "7px 0", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>{t}</button>
+                    ))}
+                  </div>
+                  <div style={{ height: 1, background: C.border, margin: "4px 6px" }} />
                   <button onClick={() => { setMenuOpen(false); handleLogout(); }} style={{ ...menuItemStyle, color: C.coral }}>
                     <X size={15} /> Sair
                   </button>
@@ -1285,7 +1395,7 @@ export default function App() {
       </main>
 
       <BottomNav tab={tab} setTab={setTab} />
-      <QuickAddFab onAddCusto={addCusto} onAddReceita={addReceita} demandas={data.demandas} onResolveDemanda={(id) => updateDemandaStatus(id, "Concluída")} />
+      <QuickAddFab onAddCusto={addCusto} onAddReceita={addReceita} onAddDemanda={addDemanda} demandas={data.demandas} onResolveDemanda={(id) => updateDemandaStatus(id, "Concluída")} />
 
       {saveError && (
         <div style={{
@@ -1494,10 +1604,10 @@ function useAtencao(custos, demandas, dias = 7) {
       .filter(i => i.dateObj && i.dateObj <= limite);
     const itensDemanda = demandas
       .filter(d => d.status !== "Concluída" && d.prazo)
-      .map(d => ({ id: `d-${d.id}`, rawId: d.id, tab: "demandas", label: d.nome, data: d.prazo, dateObj: toDateObj(d.prazo) }))
+      .map(d => ({ id: `d-${d.id}`, rawId: d.id, tab: "demandas", label: d.nome, data: d.prazo, dateObj: toDateObj(d.prazo), hora: ((d.detalhes || "").match(/\b(\d{1,2}):(\d{2})\b/) || [""])[0] }))
       .filter(i => i.dateObj && i.dateObj <= limite);
     return [...itensCusto, ...itensDemanda]
-      .map(i => ({ ...i, atrasado: i.dateObj < hoje, diasAtraso: Math.max(0, Math.round((hoje - i.dateObj) / 86400000)) }))
+      .map(i => ({ ...i, atrasado: i.dateObj < hoje, diasAtraso: Math.max(0, Math.round((hoje - i.dateObj) / 86400000)), diasFalta: Math.max(0, Math.round((i.dateObj - hoje) / 86400000)) }))
       .sort((a, b) => a.dateObj - b.dateObj);
   }, [custos, demandas, dias]);
 }
@@ -1515,7 +1625,7 @@ function DonutTotal({ total, hidden }) {
 }
 // Phone numbers inside free text become tappable (tel:) links.
 const renderTel = (texto) => {
-  const partes = String(texto || "").split(/(\+?\(?\d[\d\s\-()]{7,}\d)/g);
+  const partes = String(texto || "").split(/(\+?\(?\d[\d\s\-()]{6,}\d)/g);
   return partes.map((p, i) => i % 2 === 1
     ? <a key={i} href={`tel:${p.replace(/[^\d+]/g, "")}`} onClick={(e) => e.stopPropagation()} style={{ color: C.lavender, textDecoration: "underline" }}>{p}</a>
     : p);
@@ -1540,7 +1650,14 @@ const diasAteVenc = (iso) => {
   return Math.round((new Date(y, m - 1, d) - hoje) / 86400000);
 };
 
-function AttentionCard({ itens, onNavigate, onConcluirDemanda, title = "Precisa de atenção", limit = 6, emptyText, okWhenEmpty = false, neutro = false }) {
+// Agenda: "qua 19/11 · 10:00 · em 20 dias" (hoje/amanhã por extenso).
+const rotuloAgenda = (item) => {
+  const [y, m, d] = String(item.data).split("-").map(Number);
+  const dow = ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"][new Date(y, m - 1, d).getDay()];
+  const quando = item.diasFalta === 0 ? "hoje" : item.diasFalta === 1 ? "amanhã" : `em ${item.diasFalta} dias`;
+  return `${dow} ${fmtDate(item.data).slice(0, 5)}${item.hora ? " · " + item.hora : ""} · ${quando}`;
+};
+function AttentionCard({ itens, onNavigate, onConcluirDemanda, title = "Precisa de atenção", limit = 6, emptyText, okWhenEmpty = false, neutro = false, agenda = false }) {
   const [aberto, setAberto] = useState(false);
   if (itens.length === 0) {
     // Cards with an emptyText stay on screen with a calm message; the others simply disappear.
@@ -1578,12 +1695,18 @@ function AttentionCard({ itens, onNavigate, onConcluirDemanda, title = "Precisa 
             }}
           >
             <Clock size={14} color={item.atrasado ? C.coral : C.amber} style={{ flexShrink: 0 }} />
+            {agenda && !item.atrasado ? (
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13, color: C.ink, fontWeight: 600, lineHeight: 1.3 }}>{item.label}</div>
+                <div style={{ fontSize: 11.5, fontWeight: 700, color: C.amber, marginTop: 2 }}>{rotuloAgenda(item)}</div>
+              </div>
+            ) : (<>
             <span style={{ flex: 1, fontSize: 13, color: C.ink, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
               {item.label}
             </span>
             <span style={{ fontSize: 11.5, fontWeight: 700, color: item.atrasado ? C.coral : C.amber, flexShrink: 0 }}>
               {item.atrasado ? fmtAtraso(item.diasAtraso) : fmtDate(item.data)}
-            </span>
+            </span></>)}
             {item.tab === "demandas" && onConcluirDemanda && (
               <button
                 type="button"
@@ -2061,13 +2184,11 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
   const ano = new Date().getFullYear();
   const mesAtual = currentMonth();
   const mesAnterior = shiftMonth(mesAtual, -1);
-  const atencao = useAtencao(custos, demandas);
   const proximos30Todos = useAtencao(custos, demandas, 30);
-  // "Próximos vencimentos" shows only what is NOT already listed in "Precisa de atenção" above.
-  const proximos30 = useMemo(() => {
-    const jaMostrados = new Set(atencao.map(i => i.id));
-    return proximos30Todos.filter(i => !jaMostrados.has(i.id));
-  }, [atencao, proximos30Todos]);
+  // "Precisa de atenção" = só o que já passou do prazo. "Agenda" = tudo que vem pela frente
+  // (consultas, demandas e custos a vencer) em ordem de data, sem repetir itens entre os dois cartões.
+  const atencao = useMemo(() => proximos30Todos.filter(i => i.atrasado), [proximos30Todos]);
+  const proximos30 = useMemo(() => proximos30Todos.filter(i => !i.atrasado), [proximos30Todos]);
   const ritmo = useRitmoMes(custos, mesAtual);
 
   const receitasComparativo = useMemo(() => {
@@ -2255,7 +2376,7 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
   return (
     <div>
       <AttentionCard itens={atencao} onNavigate={onNavigate} onConcluirDemanda={onConcluirDemanda}
-        emptyText="Nada atrasado nem vencendo nos próximos 7 dias." okWhenEmpty />
+        emptyText="Nada atrasado. Tudo em dia." okWhenEmpty />
 
       <BalanceHero
         pix={pixMes}
@@ -2351,7 +2472,7 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
                 <DonutTotal total={porFonte.reduce((t, f) => t + f.value, 0)} hidden={hidden} />
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
-                    <Pie data={porFonte} dataKey="value" nameKey="name" innerRadius={33} outerRadius={54} paddingAngle={2}>
+                    <Pie data={porFonte} dataKey="value" nameKey="name" innerRadius={37} outerRadius={55} paddingAngle={2}>
                       {porFonte.map((f) => <Cell key={f.name} fill={fonteColor(f.name)} />)}
                     </Pie>
                     <Tooltip content={<RichTooltip />} />
@@ -2383,7 +2504,7 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
                 <DonutTotal total={porCategoria.reduce((t, f) => t + f.value, 0)} hidden={hidden} />
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
-                    <Pie data={porCategoria} dataKey="value" nameKey="name" innerRadius={33} outerRadius={54} paddingAngle={2}>
+                    <Pie data={porCategoria} dataKey="value" nameKey="name" innerRadius={37} outerRadius={55} paddingAngle={2}>
                       {porCategoria.map((f) => <Cell key={f.name} fill={catColor(f.name)} />)}
                     </Pie>
                     <Tooltip content={<RichTooltip />} />
@@ -2420,10 +2541,10 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
               <BarChart data={tendencia} barGap={4}>
                 <defs>
                   <linearGradient id="gPago" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#FF7A85" /><stop offset="100%" stopColor="#E8434F" />
+                    <stop offset="0%" stopColor={C.gradOut[0]} /><stop offset="100%" stopColor={C.gradOut[1]} />
                   </linearGradient>
                   <linearGradient id="gRecebido" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#2CF0BD" /><stop offset="100%" stopColor="#00B98A" />
+                    <stop offset="0%" stopColor={C.gradIn[0]} /><stop offset="100%" stopColor={C.gradIn[1]} />
                   </linearGradient>
                 </defs>
                 <XAxis dataKey="mes" tick={{ fontSize: 11, fill: C.faint }} axisLine={{ stroke: C.border }} tickLine={false} />
@@ -2516,7 +2637,7 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
                 <XAxis dataKey="mes" tick={{ fontSize: 11, fill: C.faint }} axisLine={{ stroke: C.border }} tickLine={false} />
                 <YAxis hide />
                 <ReferenceLine y={0} stroke={C.border} />
-                <Tooltip cursor={{ stroke: C.border, strokeWidth: 1 }} formatter={(v) => fmtBRL(v)} contentStyle={{ borderRadius: 10, border: "none", background: C.card, boxShadow: shadowMd, fontSize: 12.5, color: C.ink }} itemStyle={{ color: C.ink }} labelStyle={{ color: C.muted }} />
+                <Tooltip separator=": " cursor={{ stroke: C.border, strokeWidth: 1 }} formatter={(v) => fmtBRL(v)} contentStyle={{ borderRadius: 10, border: "none", background: C.card, boxShadow: shadowMd, fontSize: 12.5, color: C.ink }} itemStyle={{ color: C.ink }} labelStyle={{ color: C.muted }} />
                 <Area type="monotone" dataKey="Acumulado" stroke={acumColor} strokeWidth={2.5} fill="url(#gAcum)" dot={{ r: 3.5, fill: acumColor, strokeWidth: 0 }} activeDot={{ r: 5 }} connectNulls={false} />
               </AreaChart>
             </ResponsiveContainer>
@@ -2534,7 +2655,7 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
                   <XAxis dataKey="nome" interval={0} height={44}
                     tick={<WrapTick max={receitasComparativo.length > 5 ? 9 : 11} />} axisLine={{ stroke: C.border }} tickLine={false} />
                   <YAxis hide />
-                  <Tooltip cursor={{ stroke: C.border, strokeWidth: 1 }} formatter={(v) => fmtBRL(v)} contentStyle={{ borderRadius: 10, border: "none", background: C.card, boxShadow: shadowMd, fontSize: 12.5, color: C.ink }} itemStyle={{ color: C.ink }} labelStyle={{ color: C.muted }} />
+                  <Tooltip separator=": " cursor={{ stroke: C.border, strokeWidth: 1 }} formatter={(v) => fmtBRL(v)} contentStyle={{ borderRadius: 10, border: "none", background: C.card, boxShadow: shadowMd, fontSize: 12.5, color: C.ink }} itemStyle={{ color: C.ink }} labelStyle={{ color: C.muted }} />
                   <Bar dataKey="Previsto" fill="#5C6485" radius={[4, 4, 0, 0]} />
                   <Bar dataKey="Recebido" fill={C.emerald} radius={[4, 4, 0, 0]} />
                 </BarChart>
@@ -2545,8 +2666,8 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
 
         {/* alignSelf: start — a short list must not be stretched to the height of its neighbour */}
         <div style={{ alignSelf: "start", display: "flex", flexDirection: "column", gap: 20 }}>
-          <AttentionCard itens={proximos30} onNavigate={onNavigate} onConcluirDemanda={onConcluirDemanda} title="Próximos vencimentos (30 dias)" limit={8} neutro
-            emptyText={atencao.length > 0 ? "Nenhum outro vencimento nos próximos 30 dias." : "Nenhum vencimento nos próximos 30 dias."} />
+          <AttentionCard itens={proximos30} onNavigate={onNavigate} onConcluirDemanda={onConcluirDemanda} title="Agenda · próximos 30 dias" limit={8} neutro agenda
+            emptyText="Nada agendado nos próximos 30 dias." />
           <PixMesCard pix={pixMes} mesLabel={mesLabel} hidden={hidden} />
         </div>
       </div>
@@ -2631,8 +2752,8 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
     const totalPrevisto = filtrados.reduce((s,c) => s + Number(c.valorPrevisto||0), 0);
     const totalPago = filtrados.reduce((s,c) => s + Number(c.valorPago||0), 0);
     const pagos = filtrados.filter(c => c.status === "Pago").length;
-    const pendentes = filtrados.filter(c => c.status === "Pendente").length;
-    const atrasados = filtrados.filter(c => c.status === "Atrasado").length;
+    const pendentes = filtrados.filter(c => statusEfetivo(c) === "Pendente").length;
+    const atrasados = filtrados.filter(c => statusEfetivo(c) === "Atrasado").length;
     const porFonte = {};
     filtrados.forEach(c => { const k = contaDaFonte(c.fonte); porFonte[k] = (porFonte[k]||0) + Number(c.valorPago||0); });
     // Largest fonte first — same ordering as the dashboard's "Custos por fonte".
@@ -2705,7 +2826,7 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
     const ordem = ["Atrasado", "Pendente", "Pago"];
     return ordem
       .map(status => {
-        const items = filtrados.filter(c => c.status === status);
+        const items = filtrados.filter(c => statusEfetivo(c) === status);
         return { status, items, blocos: agruparDivididos(items) };
       })
       .filter(g => g.items.length > 0);
@@ -2766,7 +2887,7 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-        <h2 style={{ margin: 0, fontFamily: "'Fraunces', serif", fontWeight: 700, fontSize: 25, letterSpacing: -0.4, color: C.ink }}>Custos</h2>
+        <h2 style={{ margin: 0, fontFamily: "'Fraunces', serif", fontWeight: 700, fontSize: 25, letterSpacing: -0.4, color: C.pageInk }}>Custos</h2>
         <div style={{ display: "flex", gap: 8 }}>
           <button className="tap" onClick={openNew} style={addBtnStyle}><Plus size={16} /> Novo</button>
         </div>
@@ -2816,7 +2937,7 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
                   <Pie data={Object.entries(totals.porFonte).map(([name,value])=>({name,value}))} dataKey="value" nameKey="name" innerRadius={36} outerRadius={58} paddingAngle={2}>
                     {Object.keys(totals.porFonte).map((f) => <Cell key={f} fill={fonteColor(f)} />)}
                   </Pie>
-                  <Tooltip formatter={(v) => fmtBRL(v)} contentStyle={{ borderRadius: 10, border: "none", background: C.card, boxShadow: shadowMd, fontSize: 12, color: C.ink }} itemStyle={{ color: C.ink }} labelStyle={{ color: C.muted }} />
+                  <Tooltip separator=": " formatter={(v) => fmtBRL(v)} contentStyle={{ borderRadius: 10, border: "none", background: C.card, boxShadow: shadowMd, fontSize: 12, color: C.ink }} itemStyle={{ color: C.ink }} labelStyle={{ color: C.muted }} />
                 </PieChart>
               </ResponsiveContainer>
             </div>
@@ -2860,14 +2981,14 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, padding: "0 2px" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
                     <span style={{ width: 7, height: 7, borderRadius: "50%", background: accent }} />
-                    <span style={{ fontWeight: 700, fontSize: 12.5, color: C.ink, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                    <span style={{ fontWeight: 700, fontSize: 12.5, color: C.pageInk, textTransform: "uppercase", letterSpacing: 0.5 }}>
                       {GROUP_LABEL[g.status]}
                     </span>
-                    <span style={{ fontSize: 11, fontWeight: 700, color: C.muted, background: C.border, borderRadius: 10, padding: "1px 7px" }}>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: C.pageMuted, background: C.pageChip, borderRadius: 10, padding: "1px 7px" }}>
                       {g.items.length}
                     </span>
                   </div>
-                  <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: C.muted }}>{fmtBRL(totalGrupo)}</span>
+                  <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: C.pageMuted }}>{fmtBRL(totalGrupo)}</span>
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                   {g.blocos.map((b, bi) => {
@@ -2879,7 +3000,7 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
                         padding: 7, display: "flex", flexDirection: "column", gap: 6
                       }}>
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "3px 9px 1px", fontSize: 10.5, fontWeight: 700, letterSpacing: 0.4, textTransform: "uppercase", color: C.lavender }}>
-                          <span>Dividido em {b.itens.length} fontes</span>
+                          <span>{new Set(b.itens.map(x => x.fonte)).size === 1 ? `${b.itens.length} pagamentos · ${b.itens[0].fonte}` : `Dividido em ${b.itens.length} fontes`}</span>
                           <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: C.muted, letterSpacing: 0 }}>{fmtBRL(b.total)}</span>
                         </div>
                         {linhas}
@@ -3057,7 +3178,7 @@ function ReceitasTab({ receitas, onAdd, onRemove, onUpdate, inicioContagem }) {
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-        <h2 style={{ margin: 0, fontFamily: "'Fraunces', serif", fontWeight: 700, fontSize: 25, letterSpacing: -0.4, color: C.ink }}>Receitas</h2>
+        <h2 style={{ margin: 0, fontFamily: "'Fraunces', serif", fontWeight: 700, fontSize: 25, letterSpacing: -0.4, color: C.pageInk }}>Receitas</h2>
         <button className="tap" onClick={openNew} style={addBtnStyle}><Plus size={16} /> Nova</button>
       </div>
 
@@ -3099,7 +3220,7 @@ function ReceitasTab({ receitas, onAdd, onRemove, onUpdate, inicioContagem }) {
                       <Pie data={porConta.map(([name, value]) => ({ name, value }))} dataKey="value" nameKey="name" innerRadius={36} outerRadius={58} paddingAngle={2}>
                         {porConta.map(([f]) => <Cell key={f} fill={fonteColor(f)} />)}
                       </Pie>
-                      <Tooltip formatter={(v) => fmtBRL(v)} contentStyle={{ borderRadius: 10, border: "none", background: C.card, boxShadow: shadowMd, fontSize: 12, color: C.ink }} itemStyle={{ color: C.ink }} labelStyle={{ color: C.muted }} />
+                      <Tooltip separator=": " formatter={(v) => fmtBRL(v)} contentStyle={{ borderRadius: 10, border: "none", background: C.card, boxShadow: shadowMd, fontSize: 12, color: C.ink }} itemStyle={{ color: C.ink }} labelStyle={{ color: C.muted }} />
                     </PieChart>
                   </ResponsiveContainer>
                 </div>
@@ -3130,10 +3251,10 @@ function ReceitasTab({ receitas, onAdd, onRemove, onUpdate, inicioContagem }) {
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, padding: "0 2px" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
                   <span style={{ width: 7, height: 7, borderRadius: "50%", background: g.accent }} />
-                  <span style={{ fontWeight: 700, fontSize: 12.5, color: C.ink, textTransform: "uppercase", letterSpacing: 0.5 }}>{g.rotulo}</span>
-                  <span style={{ fontSize: 11, fontWeight: 700, color: C.muted, background: C.border, borderRadius: 10, padding: "1px 7px" }}>{g.items.length}</span>
+                  <span style={{ fontWeight: 700, fontSize: 12.5, color: C.pageInk, textTransform: "uppercase", letterSpacing: 0.5 }}>{g.rotulo}</span>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: C.pageMuted, background: C.pageChip, borderRadius: 10, padding: "1px 7px" }}>{g.items.length}</span>
                 </div>
-                <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: C.muted }}>
+                <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: C.pageMuted }}>
                   {fmtBRL(g.items.reduce((s, r) => s + Number(r.valorRecebido ?? r.valorPrevisto ?? 0), 0))}
                 </span>
               </div>
@@ -3283,7 +3404,7 @@ function ResumoTab({ custos, receitas, inicioContagem, onChangeInicio }) {
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-        <h2 style={{ margin: 0, fontFamily: "'Fraunces', serif", fontWeight: 700, fontSize: 25, letterSpacing: -0.4, color: C.ink }}>Resumo Anual</h2>
+        <h2 style={{ margin: 0, fontFamily: "'Fraunces', serif", fontWeight: 700, fontSize: 25, letterSpacing: -0.4, color: C.pageInk }}>Resumo Anual</h2>
         <SelectInput options={anos.map(String)} value={String(ano)} onChange={e=>setAno(parseInt(e.target.value,10))} style={{maxWidth:110}} />
       </div>
 
@@ -3293,7 +3414,7 @@ function ResumoTab({ custos, receitas, inicioContagem, onChangeInicio }) {
           onChange={e => { const idx = MESES.indexOf(e.target.value); onChangeInicio && onChangeInicio(`${ano}-${String(Math.max(0, idx) + 1).padStart(2, "0")}`); }}
           style={{ maxWidth: 150 }} />
         {inicioIdx > 0 && (
-          <span style={{ fontSize: 11.5, color: C.faint }}>Meses anteriores aparecem esmaecidos e ficam fora dos totais.</span>
+          <span style={{ fontSize: 11.5, color: C.pageFaint }}>Meses anteriores aparecem esmaecidos e ficam fora dos totais.</span>
         )}
       </div>
 
@@ -3312,7 +3433,7 @@ function ResumoTab({ custos, receitas, inicioContagem, onChangeInicio }) {
               <XAxis dataKey="mes" tick={{ fontSize: 11, fill: C.faint }} axisLine={{ stroke: C.border }} tickLine={false} />
               <YAxis hide domain={[domMin, domMax]} />
               <ReferenceLine y={0} stroke={C.border} />
-              <Tooltip formatter={(v, n, item) => [fmtBRL(item.payload.Saldo), "Saldo"]} contentStyle={{ borderRadius: 10, border: "none", background: C.card, boxShadow: shadowMd, fontSize: 12.5, color: C.ink }} itemStyle={{ color: C.ink }} labelStyle={{ color: C.muted }} />
+              <Tooltip separator=": " formatter={(v, n, item) => [fmtBRL(item.payload.Saldo), "Saldo"]} contentStyle={{ borderRadius: 10, border: "none", background: C.card, boxShadow: shadowMd, fontSize: 12.5, color: C.ink }} itemStyle={{ color: C.ink }} labelStyle={{ color: C.muted }} />
               <Bar dataKey="Plot" radius={[4, 4, 4, 4]}>
                 {chartData.map((d, i) => <Cell key={i} fill={saldoCor(d.Saldo)} fillOpacity={d.contado ? 1 : 0.3} />)}
                 <LabelList dataKey="Plot" content={(pr) => {
@@ -3338,7 +3459,7 @@ function ResumoTab({ custos, receitas, inicioContagem, onChangeInicio }) {
         ) : null)}
       </div>
       {vazios.length > 0 && (
-        <div style={{ marginTop: 14, marginBottom: 20, fontSize: 12, color: C.faint }}>
+        <div style={{ marginTop: 14, marginBottom: 20, fontSize: 12, color: C.pageFaint }}>
           Sem lançamentos: {vazios.map(r => r.mes).join(" · ")}
         </div>
       )}
@@ -3389,7 +3510,7 @@ function MonthDetailModal({ resumo, custos, receitas, onClose }) {
                 <Pie data={porFonte} dataKey="value" nameKey="name" innerRadius={30} outerRadius={52} paddingAngle={2}>
                   {porFonte.map((f) => <Cell key={f.name} fill={fonteColor(f.name)} />)}
                 </Pie>
-                <Tooltip formatter={(v) => fmtBRL(v)} contentStyle={{ borderRadius: 10, border: "none", background: C.card, boxShadow: shadowMd, fontSize: 12, color: C.ink }} itemStyle={{ color: C.ink }} labelStyle={{ color: C.muted }} />
+                <Tooltip separator=": " formatter={(v) => fmtBRL(v)} contentStyle={{ borderRadius: 10, border: "none", background: C.card, boxShadow: shadowMd, fontSize: 12, color: C.ink }} itemStyle={{ color: C.ink }} labelStyle={{ color: C.muted }} />
               </PieChart>
             </ResponsiveContainer>
           </div>
@@ -3509,7 +3630,7 @@ function DemandasTab({ demandas, onAdd, onRemove, onUpdate, onStatusChange, jump
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-        <h2 style={{ margin: 0, fontFamily: "'Fraunces', serif", fontWeight: 700, fontSize: 25, letterSpacing: -0.4, color: C.ink }}>Demandas</h2>
+        <h2 style={{ margin: 0, fontFamily: "'Fraunces', serif", fontWeight: 700, fontSize: 25, letterSpacing: -0.4, color: C.pageInk }}>Demandas</h2>
         <button className="tap" onClick={openNew} style={addBtnStyle}><Plus size={16} /> Nova</button>
       </div>
 
@@ -3560,14 +3681,16 @@ function DemandasTab({ demandas, onAdd, onRemove, onUpdate, onStatusChange, jump
             if (!pa && !pb) return 0;
             if (!pa) return 1;
             if (!pb) return -1;
-            return pa.localeCompare(pb);
+            if (pa !== pb) return pa.localeCompare(pb);
+            const ord = { "Alta": 0, "Média": 1, "Baixa": 2 };
+            return (ord[a.prioridade] ?? 1) - (ord[b.prioridade] ?? 1) || (a.nome || "").localeCompare(b.nome || "");
           });
           return (
             <div key={col.status}>
               <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, padding: "0 2px" }}>
-                <span style={{ fontWeight: 700, fontSize: 13.5, color: C.ink, textTransform: "uppercase", letterSpacing: 0.4 }}>{col.label}</span>
+                <span style={{ fontWeight: 700, fontSize: 13.5, color: C.pageInk, textTransform: "uppercase", letterSpacing: 0.4 }}>{col.label}</span>
                 <span style={{
-                  fontSize: 11, fontWeight: 700, color: C.muted, background: C.border,
+                  fontSize: 11, fontWeight: 700, color: C.pageMuted, background: C.pageChip,
                   borderRadius: 10, padding: "1px 8px"
                 }}>{col.count}</span>
               </div>
@@ -3582,7 +3705,7 @@ function DemandasTab({ demandas, onAdd, onRemove, onUpdate, onStatusChange, jump
                       background: C.card, boxShadow: shadowSm, borderRadius: 14, padding: "13px 14px",
                       position: "relative", cursor: "pointer"
                     }}>
-                      <div style={{ position: "absolute", left: 0, top: 10, bottom: 10, width: 3, borderRadius: 3, background: d.status === "Concluída" ? C.emeraldDeep : (PRIORIDADE_COLOR[d.prioridade] || C.border) }} />
+                      <div style={{ position: "absolute", left: 0, top: 10, bottom: 10, width: 3, borderRadius: 3, background: d.status === "Concluída" ? C.emeraldDeep : (d.prazo && d.prazo < todayISO() ? C.coral : (d.status === "Em Andamento" ? C.lavender : C.amber)) }} />
                       <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
                         <div style={{ fontWeight: 700, color: C.ink, fontSize: 14.5, marginBottom: 3, flex: 1, minWidth: 0 }}>{d.nome}</div>
                         {!col.next && (
