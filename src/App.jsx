@@ -349,10 +349,11 @@ const isDateImplausible = (dateStr) => {
   const diffYears = Math.abs(d.getFullYear() - new Date().getFullYear());
   return diffYears >= 5;
 };
-const confirmDateSanity = (dateStr, label = "data") => {
+const confirmDateSanity = async (dateStr, label = "data") => {
   if (!isDateImplausible(dateStr)) return true;
-  return window.confirm(
-    `A ${label} informada (${fmtDate(dateStr)}) parece muito distante da data de hoje. Confirma que está correta?`
+  return confirmar(
+    `A ${label} informada (${fmtDate(dateStr)}) parece muito distante da data de hoje. Confirma que está correta?`,
+    { titulo: "Data estranha", okLabel: "Está correta" }
   );
 };
 
@@ -491,7 +492,7 @@ let shadowSm = "0 1px 3px rgba(0,0,0,0.35), 0 0 0 1px rgba(255,255,255,0.04)";
 let shadowMd = "0 10px 30px rgba(0,0,0,0.45), 0 0 0 1px rgba(255,255,255,0.05)";
 // Themes. "escuro" is the app's identity and the default. "claro": cards, text and accents all light
 // (the Saldo card on Início keeps its dark gradient in both themes).
-const C_ESCURO = { ...C, gradOut: ["#FF7A85", "#E8434F"], gradIn: ["#2CF0BD", "#00B98A"] };
+const C_ESCURO = { ...C, barCinza: "#5C6485", gradOut: ["#FF7A85", "#E8434F"], gradIn: ["#2CF0BD", "#00B98A"] };
 const PAL_OUT_ESCURO = ["#FF5A68", "#FF8A3D", "#FFC53D", "#F472B6", "#A78BFA", "#38BDF8", "#2DD4BF", "#9AA5D1"];
 const PAL_IN_ESCURO = ["#00E0A8", "#22D3EE", "#4FA3FF", "#B5E655", "#818CF8", "#FDE047", "#F0ABFC", "#86EFAC"];
 // Claro: tons mais calmos e maduros (menos saturados), ainda bem distintos entre si.
@@ -506,7 +507,7 @@ const TEMAS = {
     coral: "#E0414F", coralSoft: "#E0414F22", coralDeep: "#C73341", coralLight: "#E0414F",
     amber: "#C98300", amberSoft: "#C9830022", amberDeep: "#A86C00", amberLight: "#C98300", lavender: "#6B76A8",
     pageInk: "#141B34", pageMuted: "#5A6385", pageFaint: "#7A83A3", pageChip: "#DCE1EE",
-    gradOut: ["#E5808A", "#D9606A"], gradIn: ["#4DBFA2", "#2EA98A"],
+    barCinza: "#AEB6D0", gradOut: ["#E5808A", "#D9606A"], gradIn: ["#4DBFA2", "#2EA98A"],
   },
 };
 function aplicarTema(modo) {
@@ -662,7 +663,65 @@ function SelectInput({ options, ...props }) {
   );
 }
 
-function Modal({ title, onClose, children, footer }) {
+// Confirmação com o visual do app (no lugar do confirm nativo). Sem o ConfirmHost montado, cai no confirm nativo.
+let _abrirConfirm = null;
+const confirmar = (mensagem, opcoes = {}) => (_abrirConfirm ? _abrirConfirm({ mensagem, ...opcoes }) : Promise.resolve(window.confirm(mensagem)));
+function ConfirmHost() {
+  const [cfg, setCfg] = useState(null);
+  const ref = useRef(null);
+  useEffect(() => {
+    _abrirConfirm = (c) => new Promise(res => {
+      if (ref.current) ref.current.res(false);
+      ref.current = { ...c, res };
+      setCfg(ref.current);
+    });
+    return () => { _abrirConfirm = null; };
+  }, []);
+  const fechar = (v) => { const c = ref.current; ref.current = null; setCfg(null); if (c) c.res(v); };
+  useEffect(() => {
+    if (!cfg) return;
+    const onKey = (e) => { if (e.key === "Escape") fechar(false); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [cfg]);
+  if (!cfg) return null;
+  return (
+    <div onClick={() => fechar(false)} style={{ position: "fixed", inset: 0, zIndex: 600, background: "#0A0E1Cb8", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 20, maxWidth: 420, width: "100%", padding: "22px 22px 18px", boxShadow: "0 20px 50px #0008", animation: "slideUp .2s ease-out" }}>
+        {cfg.titulo && <div style={{ fontFamily: "'Fraunces', serif", fontSize: 19, color: C.ink, marginBottom: 10 }}>{cfg.titulo}</div>}
+        <div style={{ whiteSpace: "pre-line", fontSize: 14, lineHeight: 1.55, color: C.ink, marginBottom: 20 }}>{cfg.mensagem}</div>
+        <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+          <button type="button" onClick={() => fechar(false)} style={{ border: `1px solid ${C.border}`, background: "transparent", color: C.muted, borderRadius: 12, padding: "10px 16px", fontSize: 14, fontWeight: 700, cursor: "pointer" }}>{cfg.cancelLabel || "Cancelar"}</button>
+          <button type="button" autoFocus onClick={() => fechar(true)} style={{ border: "none", background: cfg.perigo ? C.coral : C.emerald, color: cfg.perigo ? "#fff" : "#0A0E1C", borderRadius: 12, padding: "10px 18px", fontSize: 14, fontWeight: 800, cursor: "pointer" }}>{cfg.okLabel || "Confirmar"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Se o app ficar aberto na virada do mês e a pessoa estiver vendo o mês que acabou, passa sozinho para o novo mês corrente.
+function useMesCorrenteAuto(setMes) {
+  const ref = useRef(currentMonth());
+  useEffect(() => {
+    const checar = () => {
+      const atual = currentMonth();
+      if (atual === ref.current) return;
+      const antigo = ref.current;
+      ref.current = atual;
+      setMes(m => (m === antigo ? atual : m));
+    };
+    const t = setInterval(checar, 60000);
+    document.addEventListener("visibilitychange", checar);
+    return () => { clearInterval(t); document.removeEventListener("visibilitychange", checar); };
+  }, []);
+}
+
+function Modal({ title, onClose, children, footer, headerExtra }) {
+  // Enquanto há janela aberta, o "+" rápido some (a ponta dele aparecia na borda da janela).
+  useEffect(() => {
+    document.body.classList.add("modal-aberto");
+    return () => document.body.classList.remove("modal-aberto");
+  }, []);
   return (
     <div style={{
       position: "fixed", inset: 0, background: "#151A2E99", zIndex: 50,
@@ -681,6 +740,7 @@ function Modal({ title, onClose, children, footer }) {
           <div style={{ width: 36, height: 4, borderRadius: 4, background: C.border, margin: "0 auto 16px" }} />
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
             <h3 style={{ margin: 0, fontFamily: "'Fraunces', serif", fontSize: 21, color: C.ink }}>{title}</h3>
+            {headerExtra}
             <button onClick={onClose} style={{
               border: "none", background: C.border, borderRadius: "50%", width: 32, height: 32,
               display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: C.ink
@@ -801,7 +861,7 @@ function QuickAddFab({ onAddCusto, onAddReceita, onAddDemanda, demandas = [], on
   // entry also gets a matchedDemanda suggestion when its descrição clearly
   // corresponds to an open demanda (see matchDemanda) — pre-checked,
   // the person can untick it; ticked ones also mark that demanda Concluída on save.
-  const analisar = () => {
+  const analisar = async () => {
     if (!text.trim()) return;
     const parsed = parseQuickEntry(text).map(d => {
       if (d.tipo !== "custo") return d;
@@ -809,8 +869,9 @@ function QuickAddFab({ onAddCusto, onAddReceita, onAddDemanda, demandas = [], on
       return matched ? { ...d, matchedDemandaId: matched.id, matchedDemandaNome: matched.nome, resolverDemanda: true } : d;
     });
     if (parsed.every(p => p.tipo !== "demanda" && !isValorValido(p.valor))) {
-      const continuar = window.confirm(
-        "Não encontrei nenhum valor no texto digitado. Quer continuar e preencher o valor manualmente na próxima tela?"
+      const continuar = await confirmar(
+        "Não encontrei nenhum valor no texto digitado. Quer continuar e preencher o valor manualmente na próxima tela?",
+        { okLabel: "Continuar" }
       );
       if (!continuar) return;
     }
@@ -836,7 +897,7 @@ function QuickAddFab({ onAddCusto, onAddReceita, onAddDemanda, demandas = [], on
       alert("Cada lançamento precisa de um valor maior que zero.");
       return;
     }
-    if (draft[0].data && !confirmDateSanity(draft[0].data, draft[0].tipo === "custo" ? "data de vencimento" : draft[0].tipo === "demanda" ? "prazo" : "data de recebimento")) return;
+    if (draft[0].data && !(await confirmDateSanity(draft[0].data, draft[0].tipo === "custo" ? "data de vencimento" : draft[0].tipo === "demanda" ? "prazo" : "data de recebimento"))) return;
     setSaving(true);
     try {
       for (let i = 0; i < draft.length; i++) {
@@ -893,7 +954,7 @@ function QuickAddFab({ onAddCusto, onAddReceita, onAddDemanda, demandas = [], on
 
   return (
     <>
-      <button className="tap" onClick={() => setOpen(true)} title="Lançamento rápido" aria-hidden={escondido} tabIndex={escondido ? -1 : 0} style={{
+      <button className="tap fab-rapido" onClick={() => setOpen(true)} title="Lançamento rápido" aria-hidden={escondido} tabIndex={escondido ? -1 : 0} style={{
         position: "fixed", right: 8, bottom: "calc(88px + env(safe-area-inset-bottom))", zIndex: 42,
         width: 42, height: 42, borderRadius: 21, border: "none",
         background: C.emerald, color: "#0A0E1C", cursor: "pointer",
@@ -1094,7 +1155,7 @@ export default function App() {
   const [inicioContagem, setInicioContagem] = useState(lerInicioContagem);
   const mudarInicioContagem = (v) => { setInicioContagem(v); salvarInicioContagem(v); };
   const [jumpTarget, setJumpTarget] = useState(null);
-  const goToItem = (tab, id) => { setTab(tab); setJumpTarget({ tab, id }); };
+  const goToItem = (tab, id, extra = {}) => { setTab(tab); setJumpTarget({ tab, id, ...extra }); };
   const [saveError, setSaveError] = useState(false);
   const fileInputRef = useRef(null);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -1284,6 +1345,7 @@ export default function App() {
         * { box-sizing: border-box; }
         body { margin: 0; background: ${C.page}; }
         :root { color-scheme: ${temaAtual === "claro" ? "light" : "dark"}; }
+        body.modal-aberto .fab-rapido { opacity: 0 !important; pointer-events: none !important; }
         @keyframes slideUp { from { transform: translateY(24px); opacity: 0 } to { transform: translateY(0); opacity: 1 } }
         @keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }
         ::-webkit-scrollbar { width: 8px; height: 8px; }
@@ -1387,7 +1449,7 @@ export default function App() {
       </div>
 
       <main style={{ maxWidth: 1080, margin: "0 auto", padding: "20px 20px 0" }}>
-        {tab === "dashboard" && <DashboardTab custos={data.custos} receitas={receitasRenda} depositos={depositosRec} demandas={data.demandas} onNavigate={goToItem} onConcluirDemanda={(id) => updateDemandaStatus(id, "Concluída")} inicioContagem={inicioContagem} />}
+        {tab === "dashboard" && <DashboardTab custos={data.custos} receitas={receitasRenda} depositos={depositosRec} demandas={data.demandas} onNavigate={goToItem} onConcluirDemanda={(id) => updateDemandaStatus(id, "Concluída")} inicioContagem={inicioContagem} fixos={fixos} />}
         {tab === "custos" && <CustosTab fixos={fixos} fixosErro={fixosErro} onAddFixo={addFixo} onUpdateFixo={updateFixo} onRemoveFixo={removeFixo} custos={data.custos} onAdd={addCusto} onRemove={removeCusto} onUpdate={updateCusto} jumpTarget={jumpTarget && jumpTarget.tab === "custos" ? jumpTarget : null} onConsumeJump={() => setJumpTarget(null)} />}
         {tab === "receitas" && <ReceitasTab receitas={data.receitas} onAdd={addReceita} onRemove={removeReceita} onUpdate={updateReceita} inicioContagem={inicioContagem} />}
         {tab === "resumo" && <ResumoTab custos={data.custos} receitas={receitasRenda} inicioContagem={inicioContagem} onChangeInicio={mudarInicioContagem} />}
@@ -1395,6 +1457,7 @@ export default function App() {
       </main>
 
       <BottomNav tab={tab} setTab={setTab} />
+      <ConfirmHost />
       <QuickAddFab onAddCusto={addCusto} onAddReceita={addReceita} onAddDemanda={addDemanda} demandas={data.demandas} onResolveDemanda={(id) => updateDemandaStatus(id, "Concluída")} />
 
       {saveError && (
@@ -1442,7 +1505,41 @@ function WrapTick({ x, y, payload, fmt, max = 11 }) {
   );
 }
 
-function BalanceHero({ pix, saldo, trendAtual, trendAnterior, mesLabel, hidden, onToggle, saldosPorMes, porFonte, expanded, onToggleExpanded, inicioIdx = 0 }) {
+// Seletor de mês discreto: folha pequena com os 12 meses, setas de ano e "Hoje".
+function SeletorMes({ mes, onPick, onClose }) {
+  const [ano, setAno] = useState(parseInt(mes.split("-")[0], 10));
+  const hoje = currentMonth();
+  const pick = (m) => { onPick(m); onClose(); };
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 550, background: "#0A0E1Cb0", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 20, width: "100%", maxWidth: 340, padding: "16px 16px 14px", boxShadow: "0 20px 50px #0008", animation: "slideUp .2s ease-out" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+          <button type="button" onClick={() => setAno(a => a - 1)} style={monthNavBtnStyle} aria-label="Ano anterior">‹</button>
+          <span style={{ fontFamily: "'Fraunces', serif", fontSize: 18, fontWeight: 600, color: C.ink }}>{ano}</span>
+          <button type="button" onClick={() => setAno(a => a + 1)} style={monthNavBtnStyle} aria-label="Próximo ano">›</button>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
+          {MESES_ABR.map((nome, i) => {
+            const key = `${ano}-${String(i + 1).padStart(2, "0")}`;
+            const sel = key === mes;
+            return (
+              <button key={key} type="button" onClick={() => pick(key)} style={{
+                position: "relative", height: 42, borderRadius: 12, cursor: "pointer", fontSize: 13.5, fontWeight: sel ? 800 : 600,
+                border: `1px solid ${sel ? C.emerald : C.border}`, background: sel ? C.emeraldSoft : "transparent", color: sel ? C.emerald : C.ink
+              }}>
+                {nome}
+                {key === hoje && <span style={{ position: "absolute", bottom: 5, left: "50%", marginLeft: -2, width: 4, height: 4, borderRadius: 2, background: C.emerald }} />}
+              </button>
+            );
+          })}
+        </div>
+        <button type="button" onClick={() => pick(hoje)} style={{ width: "100%", marginTop: 12, height: 40, borderRadius: 12, border: `1px solid ${C.border}`, background: "transparent", color: C.muted, fontSize: 13.5, fontWeight: 700, cursor: "pointer" }}>Hoje</button>
+      </div>
+    </div>
+  );
+}
+
+function BalanceHero({ pix, saldo, trendAtual, trendAnterior, mesLabel, hidden, onToggle, saldosPorMes, porFonte, expanded, onToggleExpanded, inicioIdx = 0, mesIdxVisto = new Date().getMonth(), ehMesCorrente = true, onPickMes, onAbrirSeletor, semLancamentos = false, mesAnteriorLabel = "", onVerAnterior }) {
   // Scale only by the months that count (from "contar a partir de" on), so older
   // months with incomplete history can't flatten the ones that matter.
   const maxAbs = Math.max(1, ...saldosPorMes.filter((_, i) => i >= inicioIdx).map(s => Math.abs(s)));
@@ -1451,7 +1548,8 @@ function BalanceHero({ pix, saldo, trendAtual, trendAnterior, mesLabel, hidden, 
   // within that, % only makes intuitive sense against a positive base: "466%"
   // over a negative previous saldo reads as nonsense, so that case falls back
   // to a plain R$ difference instead.
-  const saldoDiff = trendAnterior !== null ? trendAtual - trendAnterior : null;
+  const saldoDiffBruto = trendAnterior !== null ? trendAtual - trendAnterior : null;
+  const saldoDiff = saldoDiffBruto !== null && Math.abs(saldoDiffBruto) < 0.005 ? null : saldoDiffBruto; // sem diferença, sem rótulo
   const trendPct = (trendAnterior !== null && trendAnterior > 0) ? (saldoDiff / trendAnterior) * 100 : null;
   return (
     <div className="in" style={{
@@ -1471,12 +1569,12 @@ function BalanceHero({ pix, saldo, trendAtual, trendAnterior, mesLabel, hidden, 
             {trendPct !== null ? (
               <span style={{ display: "flex", alignItems: "center", gap: 2, fontSize: 10.5, fontWeight: 700, color: trendPct >= 0 ? "#4FE8BE" : "#FF8A76" }}>
                 {trendPct >= 0 ? <TrendingUp size={11} /> : <TrendingDown size={11} />}
-                {Math.abs(trendPct).toFixed(0)}% vs mês ant. até hoje
+                {Math.abs(trendPct).toFixed(0)}% vs mês ant.{ehMesCorrente ? " até hoje" : ""}
               </span>
             ) : saldoDiff !== null && (
               <span style={{ display: "flex", alignItems: "center", gap: 2, fontSize: 10.5, fontWeight: 700, color: saldoDiff >= 0 ? "#4FE8BE" : "#FF8A76" }}>
                 {saldoDiff >= 0 ? <TrendingUp size={11} /> : <TrendingDown size={11} />}
-                {hidden ? "•••" : fmtBRL(Math.abs(saldoDiff))} vs mês ant. até hoje
+                {hidden ? "•••" : fmtBRL(Math.abs(saldoDiff))} vs mês ant.{ehMesCorrente ? " até hoje" : ""}
               </span>
             )}
           </div>
@@ -1487,7 +1585,8 @@ function BalanceHero({ pix, saldo, trendAtual, trendAnterior, mesLabel, hidden, 
             {hidden ? "R$ •••••" : fmtBRL(saldo)}
           </div>
         </div>
-        <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 8, flexShrink: 0 }}>
+        <div style={{ display: "flex", gap: 8 }}>
           <button className="tap" onClick={onToggleExpanded} aria-label="Ver saldo por fonte" style={{
             width: 38, height: 38, borderRadius: 12, border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.06)",
             color: C.lavender, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
@@ -1501,16 +1600,24 @@ function BalanceHero({ pix, saldo, trendAtual, trendAnterior, mesLabel, hidden, 
             {hidden ? <EyeOff size={16} /> : <Eye size={16} />}
           </button>
         </div>
+        <button className="tap" onClick={onAbrirSeletor} aria-label="Escolher o mês" title="Escolher o mês" style={{
+          width: 38, height: 38, borderRadius: 12, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
+          border: `1px solid ${ehMesCorrente ? "rgba(255,255,255,0.12)" : "#4FE8BE"}`, background: ehMesCorrente ? "rgba(255,255,255,0.06)" : "rgba(79,232,190,0.14)",
+          color: ehMesCorrente ? C.lavender : "#4FE8BE"
+        }}>
+          <Calendar size={16} />
+        </button>
+        </div>
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 5, height: 56, marginTop: 26, position: "relative" }}>
         {saldosPorMes.map((s, i) => {
           const fora = i < inicioIdx;
           const h = s === 0 ? 2 : fora ? Math.min(6, Math.max(3, (Math.abs(s) / maxAbs) * 24)) : Math.max(3, (Math.abs(s) / maxAbs) * 24);
           const positive = s >= 0;
-          const atualMes = i === new Date().getMonth();
+          const atualMes = i === mesIdxVisto;
           const larg = atualMes ? 12 : 6;
           return (
-            <div key={i} style={{ display: "flex", flexDirection: "column", alignItems: "center", flex: 1, gap: 3, opacity: fora ? 0.35 : 1 }}>
+            <div key={i} className="tap" onClick={() => onPickMes && onPickMes(i)} title={MESES[i]} style={{ display: "flex", flexDirection: "column", alignItems: "center", flex: 1, gap: 3, opacity: fora ? 0.35 : 1, cursor: onPickMes ? "pointer" : "default" }}>
               <div style={{ height: 24, width: "100%", display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
                 <div style={{ width: larg, borderRadius: "3px 3px 0 0", height: positive ? h : 2, background: positive ? "#4FE8BE" : "rgba(255,255,255,0.12)" }} />
               </div>
@@ -1522,6 +1629,12 @@ function BalanceHero({ pix, saldo, trendAtual, trendAnterior, mesLabel, hidden, 
           );
         })}
       </div>
+
+      {semLancamentos && (
+        <div className="tap" onClick={onVerAnterior} style={{ marginTop: 14, textAlign: "center", fontSize: 12, color: "#7C86AD", cursor: "pointer", position: "relative" }}>
+          Mês começando, sem lançamentos ainda · <span style={{ color: "#4FE8BE", fontWeight: 700 }}>ver {mesAnteriorLabel} ›</span>
+        </div>
+      )}
 
       {expanded && (
         <div className="in" style={{ marginTop: 22, paddingTop: 18, borderTop: "1px solid rgba(255,255,255,0.1)", position: "relative" }}>
@@ -1604,11 +1717,15 @@ function useAtencao(custos, demandas, dias = 7) {
       .filter(i => i.dateObj && i.dateObj <= limite);
     const itensDemanda = demandas
       .filter(d => d.status !== "Concluída" && d.prazo)
-      .map(d => ({ id: `d-${d.id}`, rawId: d.id, tab: "demandas", label: d.nome, data: d.prazo, dateObj: toDateObj(d.prazo), hora: ((d.detalhes || "").match(/\b(\d{1,2}):(\d{2})\b/) || [""])[0] }))
+      .map(d => ({ id: `d-${d.id}`, rawId: d.id, tab: "demandas", label: d.nome, data: d.prazo, dateObj: toDateObj(d.prazo), prio: d.prioridade, hora: ((d.detalhes || "").match(/\b(\d{1,2}):(\d{2})\b/) || [""])[0] }))
       .filter(i => i.dateObj && i.dateObj <= limite);
     return [...itensCusto, ...itensDemanda]
       .map(i => ({ ...i, atrasado: i.dateObj < hoje, diasAtraso: Math.max(0, Math.round((hoje - i.dateObj) / 86400000)), diasFalta: Math.max(0, Math.round((i.dateObj - hoje) / 86400000)) }))
-      .sort((a, b) => a.dateObj - b.dateObj);
+      .sort((a, b) => {
+        // Mesmo dia: prioridade (Alta primeiro) e depois nome — igual à ordem da aba Tarefas.
+        const ord = { "Alta": 0, "Média": 1, "Baixa": 2 };
+        return (a.dateObj - b.dateObj) || ((ord[a.prio] ?? 1) - (ord[b.prio] ?? 1)) || String(a.label || "").localeCompare(String(b.label || ""));
+      });
   }, [custos, demandas, dias]);
 }
 
@@ -1627,7 +1744,7 @@ function DonutTotal({ total, hidden }) {
 const renderTel = (texto) => {
   const partes = String(texto || "").split(/(\+?\(?\d[\d\s\-()]{6,}\d)/g);
   return partes.map((p, i) => i % 2 === 1
-    ? <a key={i} href={`tel:${p.replace(/[^\d+]/g, "")}`} onClick={(e) => e.stopPropagation()} style={{ color: C.lavender, textDecoration: "underline" }}>{p}</a>
+    ? <a key={i} href={`tel:${p.replace(/[^\d+]/g, "")}`} onClick={(e) => e.stopPropagation()} style={{ color: C.lavender, textDecoration: "underline", whiteSpace: "nowrap" }}>{p}</a>
     : p);
 };
 // Saldos within this distance of zero are shown in a neutral tone (a month that closed even).
@@ -1657,13 +1774,13 @@ const rotuloAgenda = (item) => {
   const quando = item.diasFalta === 0 ? "hoje" : item.diasFalta === 1 ? "amanhã" : `em ${item.diasFalta} dias`;
   return `${dow} ${fmtDate(item.data).slice(0, 5)}${item.hora ? " · " + item.hora : ""} · ${quando}`;
 };
-function AttentionCard({ itens, onNavigate, onConcluirDemanda, title = "Precisa de atenção", limit = 6, emptyText, okWhenEmpty = false, neutro = false, agenda = false }) {
+function AttentionCard({ itens, onNavigate, onConcluirDemanda, title = "Precisa de atenção", limit = 6, emptyText, okWhenEmpty = false, neutro = false, agenda = false, flush = false }) {
   const [aberto, setAberto] = useState(false);
   if (itens.length === 0) {
     // Cards with an emptyText stay on screen with a calm message; the others simply disappear.
     if (!emptyText) return null;
     return (
-      <div className="in" style={{ background: C.card, boxShadow: shadowSm, borderRadius: 18, padding: "16px 18px", marginBottom: 20 }}>
+      <div className="in" style={{ background: C.card, boxShadow: shadowSm, borderRadius: 18, padding: "16px 18px", marginBottom: flush ? 0 : 20 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
           {okWhenEmpty ? <Check size={16} color={C.emerald} strokeWidth={2.6} /> : <Clock size={16} color={C.faint} />}
           <span style={{ fontWeight: 700, fontSize: 13, color: C.ink, textTransform: "uppercase", letterSpacing: 0.4 }}>{title}</span>
@@ -1675,7 +1792,7 @@ function AttentionCard({ itens, onNavigate, onConcluirDemanda, title = "Precisa 
   const visiveis = aberto ? itens : itens.slice(0, limit);
   const escondidos = itens.length - limit;
   return (
-    <div className="in" style={{ background: C.card, boxShadow: shadowSm, borderRadius: 18, padding: "16px 18px", marginBottom: 20 }}>
+    <div className="in" style={{ background: C.card, boxShadow: shadowSm, borderRadius: 18, padding: "16px 18px", marginBottom: flush ? 0 : 20 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
         {neutro ? <Calendar size={16} color={C.lavender} /> : <AlertCircle size={16} color={C.coral} />}
         <span style={{ fontWeight: 700, fontSize: 13, color: C.ink, textTransform: "uppercase", letterSpacing: 0.4 }}>{title}</span>
@@ -1712,9 +1829,9 @@ function AttentionCard({ itens, onNavigate, onConcluirDemanda, title = "Precisa 
                 type="button"
                 title="Marcar como concluída"
                 aria-label="Marcar demanda como concluída"
-                onClick={(e) => {
+                onClick={async (e) => {
                   e.stopPropagation();
-                  if (window.confirm(`Marcar "${item.label}" como Concluída?`)) onConcluirDemanda(item.rawId);
+                  if (await confirmar(`Marcar "${item.label}" como Concluída?`, { okLabel: "Concluir" })) onConcluirDemanda(item.rawId);
                 }}
                 style={{
                   flexShrink: 0, width: 26, height: 26, borderRadius: 13, border: `1px solid ${C.border}`,
@@ -1974,10 +2091,30 @@ function vencimentoDoFixo(f, mes) {
   const d = Math.min(Math.max(parseInt(f.dia, 10) || 1, 1), ultimo);
   return `${mes}-${String(d).padStart(2, "0")}`;
 }
+// Ordem dos fixos: dia do vencimento; no mesmo dia, maior valor primeiro (valor varia por último); depois nome.
+const cmpFixos = (a, b) => (a.dia || 0) - (b.dia || 0) || (Number(b.valor || 0) - Number(a.valor || 0)) || String(a.descricao || "").localeCompare(String(b.descricao || ""));
 function fixosPendentes(fixos, custos, mes) {
   const lancados = new Set(custos.filter(c => c.mes === mes).map(c => normDesc(c.descricao)));
   const ativos = fixos.filter(f => f.ativo !== false);
-  return { ativos, faltam: ativos.filter(f => !lancados.has(normDesc(f.descricao))).sort((a, b) => (a.dia || 0) - (b.dia || 0)) };
+  return { ativos, faltam: ativos.filter(f => !lancados.has(normDesc(f.descricao))).sort(cmpFixos) };
+}
+
+function FixosAVencerCard({ itens, onOpen }) {
+  if (!itens || itens.length === 0) return null;
+  const nomes = itens.slice(0, 3).map(f => `${f.descricao} (dia ${f.dia})`).join(" · ");
+  const resto = itens.length - 3;
+  const um = itens.length === 1;
+  return (
+    <div className="tap in" onClick={onOpen} style={{ display: "flex", alignItems: "center", gap: 12, background: C.card, boxShadow: shadowSm, borderRadius: 16, padding: "13px 16px", marginBottom: 16, cursor: "pointer" }}>
+      <span style={{ width: 11, height: 11, borderRadius: 6, background: C.amber, boxShadow: `0 0 10px ${C.amber}`, flexShrink: 0 }} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 10.5, fontWeight: 700, color: C.muted, textTransform: "uppercase", letterSpacing: 0.5 }}>Fixos a lançar</div>
+        <div style={{ fontSize: 14, fontWeight: 700, color: C.ink }}>{itens.length} {um ? "fixo vence" : "fixos vencem"} em até 7 dias e ainda {um ? "não foi lançado" : "não foram lançados"}</div>
+        <div style={{ fontSize: 11.5, color: C.faint, marginTop: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{nomes}{resto > 0 ? ` · +${resto}` : ""}</div>
+      </div>
+      <ChevronDown size={16} color={C.faint} style={{ transform: "rotate(-90deg)", flexShrink: 0 }} />
+    </div>
+  );
 }
 
 function FixosLed({ fixos, custos, mes, onOpen, erro }) {
@@ -2020,7 +2157,7 @@ function FixosModal({ fixos, custos, mes, onLancar, onAdd, onUpdate, onRemove, o
   const vazio = { id: null, descricao: "", dia: "", valor: "", valorPago: "", fonte: "Varia", ativo: true };
   const [f, setF] = useState(vazio);
   const [busy, setBusy] = useState(false);
-  const lista = useMemo(() => [...fixos].sort((a, b) => (a.dia || 0) - (b.dia || 0) || a.descricao.localeCompare(b.descricao)), [fixos]);
+  const lista = useMemo(() => [...fixos].sort(cmpFixos), [fixos]);
   const salvar = async (e) => {
     e.preventDefault();
     if (busy) return;
@@ -2042,7 +2179,7 @@ function FixosModal({ fixos, custos, mes, onLancar, onAdd, onUpdate, onRemove, o
   };
   const iniciais = async () => {
     if (busy) return;
-    if (!window.confirm(`Criar a lista inicial com ${FIXOS_INICIAIS.length} fixos? Você pode editar tudo depois.`)) return;
+    if (!(await confirmar(`Criar a lista inicial com ${FIXOS_INICIAIS.length} fixos? Você pode editar tudo depois.`, { okLabel: "Criar" }))) return;
     setBusy(true);
     try { for (const x of FIXOS_INICIAIS) await onAdd({ ...x, ativo: true }); } finally { setBusy(false); }
   };
@@ -2096,7 +2233,7 @@ function FixosModal({ fixos, custos, mes, onLancar, onAdd, onUpdate, onRemove, o
             </div>
             <button type="button" style={mini} onClick={() => setF({ id: x.id, descricao: x.descricao, dia: String(x.dia), valor: x.valor ? fmtValorInput(x.valor) : "", valorPago: x.valorPago ? fmtValorInput(x.valorPago) : "", fonte: x.fonte || "Varia", ativo: x.ativo !== false })}>Editar</button>
             <button type="button" style={mini} onClick={() => onUpdate(x.id, { ativo: x.ativo === false })}>{x.ativo === false ? "Ativar" : "Desativar"}</button>
-            <button type="button" style={{ ...mini, color: C.coral }} onClick={() => { if (window.confirm(`Excluir "${x.descricao}" da lista de fixos? Os custos já lançados não mudam.`)) onRemove(x.id); }}>Excluir</button>
+            <button type="button" style={{ ...mini, color: C.coral }} onClick={async () => { if (await confirmar(`Excluir "${x.descricao}" da lista de fixos? Os custos já lançados não mudam.`, { perigo: true, okLabel: "Excluir" })) onRemove(x.id); }}>Excluir</button>
           </div>
         ))}
         <form onSubmit={salvar} style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginTop: 20 }}>
@@ -2178,11 +2315,25 @@ function PixMesCard({ pix, mesLabel, hidden }) {
   );
 }
 
-function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, onConcluirDemanda, inicioContagem }) {
+function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, onConcluirDemanda, inicioContagem, fixos = [] }) {
   const [hidden, setHidden] = useState(false);
   const [saldoAberto, setSaldoAberto] = useState(false);
-  const ano = new Date().getFullYear();
-  const mesAtual = currentMonth();
+  // Mês exibido nos cartões do Início (padrão: o mês corrente). "Precisa de atenção" e "Agenda" continuam sendo de hoje.
+  // null = acompanha o mês corrente (se o app ficar aberto na virada do mês, ele muda sozinho).
+  const [mesEscolhido, setMesEscolhido] = useState(null);
+  const mesAtual = mesEscolhido || currentMonth();
+  const ehMesCorrente = !mesEscolhido;
+  const escolherMes = (m) => setMesEscolhido(m === currentMonth() ? null : m);
+  const [showSeletorMes, setShowSeletorMes] = useState(false);
+  // Fixos que vencem em até 7 dias (ou já venceram) e ainda não foram lançados neste mês. Só exibição: nada é gravado.
+  const fixosAVencer = useMemo(() => {
+    if (!ehMesCorrente || fixos.length === 0) return [];
+    const limite = new Date().getDate() + 7;
+    return fixosPendentes(fixos, custos, mesAtual).faltam.filter(f => (f.dia || 0) <= limite);
+  }, [fixos, custos, mesAtual, ehMesCorrente]);
+  const semLancamentos = ehMesCorrente && !custos.some(c => c.mes === mesAtual) && !receitas.some(r => r.mes === mesAtual);
+  const ano = parseInt(mesAtual.split("-")[0], 10);
+  const mesNumVisto = parseInt(mesAtual.split("-")[1], 10);
   const mesAnterior = shiftMonth(mesAtual, -1);
   const proximos30Todos = useAtencao(custos, demandas, 30);
   // "Precisa de atenção" = só o que já passou do prazo. "Agenda" = tudo que vem pela frente
@@ -2306,16 +2457,15 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
 
   const tendencia = useMemo(() => {
     const out = [];
-    const now = new Date();
     for (let i = 5; i >= 0; i--) {
-      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const d = new Date(ano, mesNumVisto - 1 - i, 1);
       const mesKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
       const pago = custos.filter(c => c.mes === mesKey).reduce((s, c) => s + Number(c.valorPago || 0), 0);
       const recebido = receitas.filter(r => r.mes === mesKey).reduce((s, r) => s + Number(r.valorRecebido || 0), 0);
       out.push({ mes: MESES_ABR[d.getMonth()], Pago: pago, Recebido: recebido, fora: !!inicioContagem && mesKey < inicioContagem });
     }
     return out;
-  }, [custos, receitas, inicioContagem]);
+  }, [custos, receitas, inicioContagem, ano, mesNumVisto]);
 
   // Ranked by descrição, not by record: a cost split across fontes (one record
   // per fonte, same descrição) counts as ONE cost with its combined value.
@@ -2361,13 +2511,13 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
   const inicioIdx = inicioIdxDoAno(inicioContagem, ano);
   const acumulado = useMemo(() => {
     let cum = 0;
-    const mesIdx = new Date().getMonth();
+    const mesIdx = mesNumVisto - 1;
     return MESES_ABR.map((m, i) => {
       if (i < inicioIdx) return { mes: m, Acumulado: null };
       cum += saldosPorMes[i];
       return { mes: m, Acumulado: i <= mesIdx ? cum : null };
     });
-  }, [saldosPorMes, inicioIdx]);
+  }, [saldosPorMes, inicioIdx, mesNumVisto]);
   const acumAtual = [...acumulado].reverse().find(d => d.Acumulado !== null)?.Acumulado ?? 0;
   const acumColor = acumAtual < 0 ? C.coral : C.emerald;
 
@@ -2377,6 +2527,8 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
     <div>
       <AttentionCard itens={atencao} onNavigate={onNavigate} onConcluirDemanda={onConcluirDemanda}
         emptyText="Nada atrasado. Tudo em dia." okWhenEmpty />
+
+      <FixosAVencerCard itens={fixosAVencer} onOpen={() => onNavigate && onNavigate("custos", null, { abrirFixos: true })} />
 
       <BalanceHero
         pix={pixMes}
@@ -2388,10 +2540,18 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
         onToggle={() => setHidden(h => !h)}
         saldosPorMes={saldosPorMes}
         inicioIdx={inicioIdx}
+        mesIdxVisto={mesNumVisto - 1}
+        ehMesCorrente={ehMesCorrente}
+        onPickMes={(i) => escolherMes(`${ano}-${String(i + 1).padStart(2, "0")}`)}
+        onAbrirSeletor={() => setShowSeletorMes(true)}
+        semLancamentos={semLancamentos}
+        mesAnteriorLabel={monthLabel(mesAnterior)}
+        onVerAnterior={() => escolherMes(mesAnterior)}
         porFonte={saldoPorFonte}
         expanded={saldoAberto}
         onToggleExpanded={() => setSaldoAberto(a => !a)}
       />
+      {showSeletorMes && <SeletorMes mes={mesAtual} onPick={escolherMes} onClose={() => setShowSeletorMes(false)} />}
 
       <StatRow stats={[
         { icon: <Wallet size={12} />, label: "Previsto", value: hidden ? "•••" : fmtBRL(kpis.totalPrevisto) },
@@ -2446,9 +2606,9 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
                 overColor={ritmo.pct > 150 ? "linear-gradient(90deg,#FFB929,#FF5A68)" : "linear-gradient(90deg,#FFC53D,#FFB929)"}
               />
               <div style={{ fontSize: 11, color: C.faint, marginTop: 8 }}>
-                Pago até agora: <strong style={{ color: C.ink }}>{hidden ? "•••" : fmtBRL(ritmo.pagoAteAgora)}</strong>
+                {ehMesCorrente ? "Pago até agora" : "Pago no mês"}: <strong style={{ color: C.ink }}>{hidden ? "•••" : fmtBRL(ritmo.pagoAteAgora)}</strong>
                 {" · "}Normal até o dia {ritmo.diaRef}: <strong style={{ color: C.ink }}>{hidden ? "•••" : fmtBRL(ritmo.mediaAteODia)}</strong>
-                {" · "}Média mensal: <strong style={{ color: C.ink }}>{hidden ? "•••" : fmtBRL(ritmo.mediaMensal)}</strong>
+                {Math.abs(Number(ritmo.mediaMensal) - Number(ritmo.mediaAteODia)) > 0.005 && <>{" · "}Média mensal: <strong style={{ color: C.ink }}>{hidden ? "•••" : fmtBRL(ritmo.mediaMensal)}</strong></>}
               </div>
             </>
           ) : (
@@ -2601,8 +2761,8 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
                     <XAxis dataKey="fonte" interval={0} height={44}
                       tick={<WrapTick fmt={(v) => v.replace("Débito Automático", "Déb. Automático")} />} axisLine={{ stroke: C.border }} tickLine={false} />
                     <YAxis hide />
-                    <Tooltip content={<RichTooltip modo="variacao" colorMap={{ Anterior: "#5C6485", Atual: "#E8434F" }} />} />
-                    <Bar dataKey="Anterior" fill="#5C6485" radius={[4, 4, 0, 0]}><LabelList dataKey="Anterior" position="top" formatter={rotuloK} style={{ fontSize: 10, fill: C.faint }} /></Bar>
+                    <Tooltip content={<RichTooltip modo="variacao" colorMap={{ Anterior: C.barCinza, Atual: "#E8434F" }} />} />
+                    <Bar dataKey="Anterior" fill={C.barCinza} radius={[4, 4, 0, 0]}><LabelList dataKey="Anterior" position="top" formatter={rotuloK} style={{ fontSize: 10, fill: C.faint }} /></Bar>
                     <Bar dataKey="Atual" fill="url(#gPago)" radius={[4, 4, 0, 0]}><LabelList dataKey="Atual" position="top" formatter={rotuloK} style={{ fontSize: 10, fill: C.muted, fontWeight: 700 }} /></Bar>
                   </BarChart>
                 </ResponsiveContainer>
@@ -2656,7 +2816,7 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
                     tick={<WrapTick max={receitasComparativo.length > 5 ? 9 : 11} />} axisLine={{ stroke: C.border }} tickLine={false} />
                   <YAxis hide />
                   <Tooltip separator=": " cursor={{ stroke: C.border, strokeWidth: 1 }} formatter={(v) => fmtBRL(v)} contentStyle={{ borderRadius: 10, border: "none", background: C.card, boxShadow: shadowMd, fontSize: 12.5, color: C.ink }} itemStyle={{ color: C.ink }} labelStyle={{ color: C.muted }} />
-                  <Bar dataKey="Previsto" fill="#5C6485" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="Previsto" fill={C.barCinza} radius={[4, 4, 0, 0]} />
                   <Bar dataKey="Recebido" fill={C.emerald} radius={[4, 4, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
@@ -2666,7 +2826,7 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
 
         {/* alignSelf: start — a short list must not be stretched to the height of its neighbour */}
         <div style={{ alignSelf: "start", display: "flex", flexDirection: "column", gap: 20 }}>
-          <AttentionCard itens={proximos30} onNavigate={onNavigate} onConcluirDemanda={onConcluirDemanda} title="Agenda · próximos 30 dias" limit={8} neutro agenda
+          <AttentionCard itens={proximos30} onNavigate={onNavigate} onConcluirDemanda={onConcluirDemanda} title="Agenda · próximos 30 dias" limit={8} neutro agenda flush
             emptyText="Nada agendado nos próximos 30 dias." />
           <PixMesCard pix={pixMes} mesLabel={mesLabel} hidden={hidden} />
         </div>
@@ -2699,7 +2859,7 @@ function CardList({ rows, onRemove, onEdit, empty, render }) {
         }}>
           <div style={{ position: "absolute", left: 0, top: 12, bottom: 12, width: 3, borderRadius: 3, background: STATUS_ACCENT[row.status] || C.border }} />
           {render(row)}
-          <button onClick={(e) => { e.stopPropagation(); if (window.confirm("Remover este item?")) onRemove(row.id); }} title="Remover" style={{
+          <button onClick={async (e) => { e.stopPropagation(); if (await confirmar("Remover este item?", { perigo: true, okLabel: "Remover" })) onRemove(row.id); }} title="Remover" style={{
             border: "none", background: "transparent", color: C.faint, cursor: "pointer",
             padding: 4, display: "flex", alignItems: "center", flexShrink: 0, marginRight: 30
           }}>
@@ -2731,6 +2891,7 @@ function agruparDivididos(items) {
 function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJump, fixos = [], fixosErro = false, onAddFixo, onUpdateFixo, onRemoveFixo }) {
   const [showFixos, setShowFixos] = useState(false);
   const [mesFiltro, setMesFiltro] = useState(currentMonth());
+  useMesCorrenteAuto(setMesFiltro);
   const [fonteFiltro, setFonteFiltro] = useState("Todas");
   // Old records may still carry a fonte that is no longer offered (BB, plain "Transferência"); keep them filterable.
   const fontesLegadas = useMemo(() => [...new Set(custos.map(c => c.fonte).filter(f => f && !FONTES_FORM.includes(f)))], [custos]);
@@ -2741,7 +2902,12 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
   const filtrados = useMemo(() => {
     const list = custos.filter(c => c.mes === mesFiltro && fonteCombina(c, fonteFiltro));
     return [...list].sort((a, b) => {
-      if (!a.dataPagamento && !b.dataPagamento) return 0;
+      // Sem data de pagamento (a pagar / atrasados): por vencimento; no mesmo dia, maior valor primeiro, depois nome.
+      if (!a.dataPagamento && !b.dataPagamento) {
+        return String(a.vencimento || "9999").localeCompare(String(b.vencimento || "9999"))
+          || (Number(b.valorPrevisto || 0) - Number(a.valorPrevisto || 0))
+          || String(a.descricao || "").localeCompare(String(b.descricao || ""));
+      }
       if (!a.dataPagamento) return 1;
       if (!b.dataPagamento) return -1;
       return a.dataPagamento.localeCompare(b.dataPagamento);
@@ -2772,22 +2938,28 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
   const [form, setForm] = useState(blankCusto(mesFiltro));
 
   const openNew = () => { setEditingId(null); setForm(blankCusto(mesFiltro)); setShowForm(true); };
+  const formDeCusto = (c) => ({
+    mes: c.mes, ano: c.ano, descricao: c.descricao, vencimento: c.vencimento || "",
+    dataPagamento: c.dataPagamento || "", valorPrevisto: fmtValorInput(c.valorPrevisto),
+    valorPago: fmtValorInput(c.valorPago), fonte: c.fonte, status: c.status, obs: c.obs || ""
+  });
   const openEdit = (c) => {
     setEditingId(c.id);
-    setForm({
-      mes: c.mes, ano: c.ano, descricao: c.descricao, vencimento: c.vencimento || "",
-      dataPagamento: c.dataPagamento || "", valorPrevisto: fmtValorInput(c.valorPrevisto),
-      valorPago: fmtValorInput(c.valorPago), fonte: c.fonte, status: c.status, obs: c.obs || ""
-    });
+    setForm(formDeCusto(c));
     setShowForm(true);
   };
 
   // "Lançar" on a fixo: opens the normal form pre-filled (nothing is saved until the person saves).
   const lancarFixo = (fx, pagoHoje = false) => {
     setEditingId(null);
-    const pagoEsp = fx.valorPago || fx.valor || 0;
+    // Sem valor/fonte no fixo: sugere os do lançamento do mês anterior com o mesmo nome (o formulário mostra; só grava no Salvar).
+    const [ay, am] = mesFiltro.split("-").map(Number);
+    const mesAnt = am === 1 ? `${ay - 1}-12` : `${ay}-${String(am - 1).padStart(2, "0")}`;
+    const ant = custos.find(c => c.mes === mesAnt && normDesc(c.descricao) === normDesc(fx.descricao));
+    const valorBase = fx.valor || (ant ? Number(ant.valorPrevisto || ant.valorPago || 0) : 0);
+    const pagoEsp = fx.valorPago || valorBase || 0;
     setForm({ ...blankCusto(mesFiltro), descricao: fx.descricao, vencimento: vencimentoDoFixo(fx, mesFiltro),
-      valorPrevisto: fx.valor ? fmtValorInput(fx.valor) : "", fonte: fx.fonte || FONTES[0],
+      valorPrevisto: valorBase ? fmtValorInput(valorBase) : "", fonte: fx.fonte || (ant && ant.fonte) || FONTES[0],
       ...(pagoHoje ? { status: "Pago", dataPagamento: todayISO(), valorPago: pagoEsp ? fmtValorInput(pagoEsp) : "" } : {}) });
     setShowForm(true);
   };
@@ -2796,6 +2968,7 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
     if (!jumpTarget) return;
     const item = custos.find(c => c.id === jumpTarget.id);
     if (item) { setMesFiltro(item.mes); openEdit(item); }
+    if (jumpTarget.abrirFixos) setShowFixos(true);
     onConsumeJump();
   }, [jumpTarget]);
 
@@ -2809,8 +2982,29 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
       alert("O valor precisa ser maior que zero.");
       return;
     }
-    if (!confirmDateSanity(form.vencimento, "data de vencimento")) return;
-    const payload = { ...form, valorPrevisto: valorPrevistoNum, valorPago: valorPagoNum };
+    if (!(await confirmDateSanity(form.vencimento, "data de vencimento"))) return;
+    // Campos-chave: um custo Pago precisa de Valor Pago e Data de Pagamento, senão some dos saldos e do Anual.
+    if (form.status === "Pago") {
+      const faltam = [];
+      if (valorPagoNum === null) faltam.push("Valor Pago");
+      if (!form.dataPagamento) faltam.push("Data Pagamento");
+      if (faltam.length) { alert(`Este custo está como Pago. Preencha: ${faltam.join(" e ")}.\n\nSe ainda não foi pago, mude o Status para Pendente.`); return; }
+    }
+    // Nome repetido: lançamento novo com a mesma descrição e a mesma fonte no mês (divisão em fontes diferentes não dispara).
+    if (!editingId) {
+      const igual = custos.find(c => c.mes === form.mes && normDesc(c.descricao) === normDesc(form.descricao) && c.fonte === form.fonte);
+      if (igual && !(await confirmar(`Já existe "${igual.descricao}" em ${monthLabel(igual.mes)} com a fonte ${igual.fonte} (${fmtBRL(igual.valorPrevisto)}, ${igual.status}).\n\nSe for outra parte de um pagamento dividido, use outra fonte. Lançar mesmo assim?`, { titulo: "Possível duplicado", okLabel: "Lançar mesmo assim" }))) return;
+    }
+    // Confirmação da fonte: ao marcar Pago (ou trocar a fonte de um custo já Pago), mostra o resumo antes de gravar.
+    if (form.status === "Pago") {
+      const orig = editingId ? custos.find(c => c.id === editingId) : null;
+      if (!orig || orig.status !== "Pago" || orig.fonte !== form.fonte) {
+        const resumo = `${form.descricao}\nValor pago: ${fmtBRL(valorPagoNum)}\nFonte: ${form.fonte}\nData do pagamento: ${fmtDate(form.dataPagamento)}`;
+        if (!(await confirmar(`${resumo}\n\nA fonte está certa?`, { titulo: "Marcar como Pago?", okLabel: "Sim, confirmar" }))) return;
+      }
+    }
+    const valorPagoFinal = valorPagoNum;
+    const payload = { ...form, valorPrevisto: valorPrevistoNum, valorPago: valorPagoFinal };
     setSaving(true);
     try {
       if (editingId) { await onUpdate(editingId, payload); } else { await onAdd(payload); }
@@ -2833,6 +3027,18 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
   }, [filtrados]);
 
   const GROUP_LABEL = { "Atrasado": "Atrasados", "Pendente": "A pagar", "Pago": "Pagos" };
+
+  // Setas do modal de edição: percorrem os custos na MESMA ordem em que aparecem na lista.
+  const ordemLista = useMemo(() => grupos.flatMap(g => g.blocos.flatMap(b => b.itens)), [grupos]);
+  const idxEdicao = editingId ? ordemLista.findIndex(c => c.id === editingId) : -1;
+  const navegarCusto = async (dir) => {
+    const alvo = ordemLista[idxEdicao + dir];
+    if (!alvo) return;
+    const original = ordemLista[idxEdicao];
+    const mudou = original && JSON.stringify(formDeCusto(original)) !== JSON.stringify(form);
+    if (mudou && !(await confirmar("Há alterações não salvas neste custo. Descartar e ir para o outro?", { okLabel: "Descartar" }))) return;
+    openEdit(alvo);
+  };
 
   // One cost row. `embutido` = drawn inside the outline of a split cost (flatter, no own shadow).
   const renderLinhaCusto = (c, i, accent, embutido) => (
@@ -2873,8 +3079,11 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
         {c.valorPago != null && Math.abs(Number(c.valorPago) - Number(c.valorPrevisto || 0)) > 0.005 && (
           <div style={{ fontSize: 10.5, color: C.faint, marginTop: 1 }}>previsto {fmtBRL(c.valorPrevisto)}</div>
         )}
+        {c.status === "Pago" && c.valorPago == null && (
+          <div style={{ fontSize: 10.5, fontWeight: 700, color: C.amberDeep, marginTop: 1 }}>sem valor pago</div>
+        )}
       </div>
-      <button onClick={(e) => { e.stopPropagation(); if (window.confirm("Remover este custo?")) onRemove(c.id); }} title="Remover" style={{
+      <button onClick={async (e) => { e.stopPropagation(); if (await confirmar("Remover este custo?", { perigo: true, okLabel: "Remover" })) onRemove(c.id); }} title="Remover" style={{
         border: "none", background: "transparent", color: C.faint, cursor: "pointer",
         padding: 4, display: "flex", alignItems: "center", flexShrink: 0
     }}>
@@ -2961,7 +3170,7 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
       <FixosLed fixos={fixos} custos={custos} mes={mesFiltro} erro={fixosErro} onOpen={() => setShowFixos(true)} />
 
       {filtrados.length > 0 && totals.pendentes === 0 && totals.atrasados === 0 && (
-        <div className="in" style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16, padding: "11px 14px", borderRadius: 14, background: C.emeraldSoft, color: C.emerald, fontSize: 13, fontWeight: 600 }}>
+        <div className="in" style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16, padding: "11px 14px", borderRadius: 14, background: C.emeraldSoft, color: C.emeraldDeep, fontSize: 13, fontWeight: 600 }}>
           <Check size={16} strokeWidth={2.6} /> {totals.pagos === 1 ? "O único custo lançado está pago." : `Todos os ${totals.pagos} custos lançados estão pagos.`}
         </div>
       )}
@@ -3020,6 +3229,15 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
       {showForm && (
         <Modal
           title={editingId ? "Editar custo" : "Novo custo"}
+          headerExtra={editingId && idxEdicao >= 0 ? (
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: "auto", marginRight: 10 }}>
+              <span style={{ fontSize: 11.5, color: C.faint, fontWeight: 600 }}>{idxEdicao + 1} de {ordemLista.length}</span>
+              {[[-1, "Custo anterior", "‹"], [1, "Próximo custo", "›"]].map(([d, rot, ch]) => (
+                <button key={d} type="button" aria-label={rot} title={rot} onClick={() => navegarCusto(d)} disabled={!ordemLista[idxEdicao + d]}
+                  style={{ border: `1px solid ${C.border}`, background: C.card, color: C.ink, borderRadius: 10, width: 34, height: 32, fontSize: 18, fontWeight: 700, lineHeight: 1, cursor: ordemLista[idxEdicao + d] ? "pointer" : "default", opacity: ordemLista[idxEdicao + d] ? 1 : 0.35 }}>{ch}</button>
+              ))}
+            </div>
+          ) : null}
           onClose={() => { setShowForm(false); setEditingId(null); }}
           footer={
             <button type="submit" form="custo-form" disabled={saving} style={{ ...addBtnStyle, width: "100%", justifyContent: "center", opacity: saving ? 0.7 : 1, cursor: saving ? "default" : "pointer" }}>
@@ -3061,6 +3279,7 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
 
 function ReceitasTab({ receitas, onAdd, onRemove, onUpdate, inicioContagem }) {
   const [mesFiltro, setMesFiltro] = useState(currentMonth());
+  useMesCorrenteAuto(setMesFiltro);
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -3162,7 +3381,19 @@ function ReceitasTab({ receitas, onAdd, onRemove, onUpdate, inicioContagem }) {
       alert("O valor precisa ser maior que zero.");
       return;
     }
-    if (!confirmDateSanity(form.dataRecebimento, "data de recebimento")) return;
+    if (!(await confirmDateSanity(form.dataRecebimento, "data de recebimento"))) return;
+    if (form.status === "Recebido" && valorRecebidoNum === null) {
+      alert("Esta receita está como Recebida. Preencha o Valor Recebido.\n\nSe ainda não entrou, mude o Status para Pendente.");
+      return;
+    }
+    // Confirmação da conta de destino: ao marcar Recebido (ou trocar a conta de uma receita já Recebida).
+    if (form.status === "Recebido") {
+      const orig = editingId ? receitas.find(r => r.id === editingId) : null;
+      if (!orig || orig.status !== "Recebido" || orig.contaDestino !== form.contaDestino) {
+        const resumo = `${form.descricao}\nValor recebido: ${fmtBRL(valorRecebidoNum)}\nConta: ${form.contaDestino || "—"}\nData do recebimento: ${fmtDate(form.dataRecebimento)}`;
+        if (!(await confirmar(`${resumo}\n\nA conta está certa?`, { titulo: "Marcar como Recebida?", okLabel: "Sim, confirmar" }))) return;
+      }
+    }
     const payload = { ...form, valorPrevisto: valorPrevistoNum, valorRecebido: valorRecebidoNum };
     setSaving(true);
     try {
@@ -3619,7 +3850,20 @@ function DemandasTab({ demandas, onAdd, onRemove, onUpdate, onStatusChange, jump
     return Object.entries(map).filter(([,v]) => v > 0);
   }, [demandas]);
   const totalDemandas = demandas.length;
-  const atrasadasDem = useMemo(() => demandas.filter(d => d.status !== "Concluída" && (diasAteVenc(d.prazo) ?? 0) < 0).length, [demandas]);
+  const listaAtrasadas = useMemo(() => demandas.filter(d => d.status !== "Concluída" && (diasAteVenc(d.prazo) ?? 0) < 0).sort((a, b) => String(a.prazo).localeCompare(String(b.prazo))), [demandas]);
+  const atrasadasDem = listaAtrasadas.length;
+  const [showAdiar, setShowAdiar] = useState(false);
+  const [novoPrazo, setNovoPrazo] = useState("");
+  const [adiarSel, setAdiarSel] = useState([]);
+  const [adiando, setAdiando] = useState(false);
+  const abrirAdiar = () => { setNovoPrazo(localISO(new Date(Date.now() + 7 * 86400000))); setAdiarSel(listaAtrasadas.map(d => d.id)); setShowAdiar(true); };
+  const adiarSelecionadas = async () => {
+    if (adiando || !novoPrazo || adiarSel.length === 0) return;
+    if (novoPrazo < todayISO()) { alert("Escolha uma data de hoje em diante."); return; }
+    if (!(await confirmar(`Mudar o prazo de ${adiarSel.length} ${adiarSel.length === 1 ? "demanda" : "demandas"} para ${fmtDate(novoPrazo)}?`, { titulo: "Adiar atrasadas", okLabel: "Adiar" }))) return;
+    setAdiando(true);
+    try { for (const id of adiarSel) await onUpdate(id, { prazo: novoPrazo }); setShowAdiar(false); } finally { setAdiando(false); }
+  };
   const pctConcluido = totalDemandas > 0 ? (resumo.concluida / totalDemandas) * 100 : 0;
   const COLUMNS = [
     { status: "Pendente", label: "Pendente", count: resumo.pendente, next: "Em Andamento" },
@@ -3657,6 +3901,7 @@ function DemandasTab({ demandas, onAdd, onRemove, onUpdate, onStatusChange, jump
             <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
               <span style={{ width: 8, height: 8, borderRadius: "50%", background: C.coral }} />
               <span style={{ fontSize: 12, color: C.coral, fontWeight: 700 }}>{atrasadasDem} {atrasadasDem === 1 ? "dos abertos está atrasado" : "dos abertos estão atrasados"}</span>
+              <button type="button" onClick={abrirAdiar} style={{ border: `1px solid ${C.coral}`, background: "transparent", color: C.coral, borderRadius: 9, padding: "3px 10px", fontSize: 11.5, fontWeight: 700, cursor: "pointer", marginLeft: 4 }}>Adiar atrasadas…</button>
             </div>
           )}
         </div>
@@ -3708,14 +3953,12 @@ function DemandasTab({ demandas, onAdd, onRemove, onUpdate, onStatusChange, jump
                       <div style={{ position: "absolute", left: 0, top: 10, bottom: 10, width: 3, borderRadius: 3, background: d.status === "Concluída" ? C.emeraldDeep : (d.prazo && d.prazo < todayISO() ? C.coral : (d.status === "Em Andamento" ? C.lavender : C.amber)) }} />
                       <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
                         <div style={{ fontWeight: 700, color: C.ink, fontSize: 14.5, marginBottom: 3, flex: 1, minWidth: 0 }}>{d.nome}</div>
-                        {!col.next && (
-                          <button onClick={(e) => { e.stopPropagation(); if (window.confirm("Remover esta demanda?")) onRemove(d.id); }} title="Remover" style={{
-                            border: "none", background: "transparent", color: C.faint, cursor: "pointer",
-                            padding: 2, display: "flex", alignItems: "center", flexShrink: 0, marginRight: 24
-                          }}>
-                            <Trash2 size={15} />
-                          </button>
-                        )}
+                        <button onClick={async (e) => { e.stopPropagation(); if (await confirmar("Remover esta demanda?", { perigo: true, okLabel: "Remover" })) onRemove(d.id); }} title="Remover" style={{
+                          border: "none", background: "transparent", color: C.faint, cursor: "pointer",
+                          padding: 2, display: "flex", alignItems: "center", flexShrink: 0, marginRight: 24
+                        }}>
+                          <Trash2 size={15} />
+                        </button>
                       </div>
                       <div style={{ fontSize: 11.5, color: C.muted, marginBottom: 3 }}>
                         Prazo {fmtDate(d.prazo)}{porPrioridade.length > 1 ? ` · ${d.prioridade}` : ""}{d.contato ? <> · {renderTel(d.contato)}</> : null}{d.detalhes ? <> · {renderTel(d.detalhes)}</> : null}
@@ -3739,10 +3982,10 @@ function DemandasTab({ demandas, onAdd, onRemove, onUpdate, onStatusChange, jump
                           </button>
                         )}
                         {(diasAteVenc(d.prazo) ?? 0) < 0 && (
-                          <button onClick={(e) => {
+                          <button onClick={async (e) => {
                             e.stopPropagation();
                             const novo = localISO(new Date(Date.now() + 7 * 86400000));
-                            if (window.confirm(`Adiar o prazo de "${d.nome}" para ${fmtDate(novo)}?`)) onUpdate(d.id, { prazo: novo });
+                            if (await confirmar(`Adiar o prazo de "${d.nome}" para ${fmtDate(novo)}?`, { okLabel: "Adiar" })) onUpdate(d.id, { prazo: novo });
                           }} title="Adiar prazo em 7 dias" style={{
                             display: "flex", alignItems: "center", gap: 5, border: `1px solid ${C.border}`, background: "transparent",
                             color: C.muted, borderRadius: 9, padding: "5px 10px", fontSize: 11.5, fontWeight: 700, cursor: "pointer"
@@ -3750,12 +3993,6 @@ function DemandasTab({ demandas, onAdd, onRemove, onUpdate, onStatusChange, jump
                             Adiar 7 dias
                           </button>
                         )}
-                        <button onClick={(e) => { e.stopPropagation(); if (window.confirm("Remover esta demanda?")) onRemove(d.id); }} title="Remover" style={{
-                          border: "none", background: "transparent", color: C.faint, cursor: "pointer",
-                          padding: 4, display: "flex", alignItems: "center", marginLeft: "auto", marginRight: 20
-                        }}>
-                          <Trash2 size={15} />
-                        </button>
                       </div>}
                     </div>
                   ))}
@@ -3765,6 +4002,32 @@ function DemandasTab({ demandas, onAdd, onRemove, onUpdate, onStatusChange, jump
           );
         })}
       </div>
+
+      {showAdiar && (
+        <Modal title="Adiar atrasadas" onClose={() => setShowAdiar(false)}
+          footer={
+            <button type="button" onClick={adiarSelecionadas} disabled={adiando || adiarSel.length === 0} style={{ ...addBtnStyle, width: "100%", justifyContent: "center", opacity: (adiando || adiarSel.length === 0) ? 0.6 : 1 }}>
+              <Check size={16} /> {adiando ? "Adiando..." : `Adiar ${adiarSel.length} ${adiarSel.length === 1 ? "demanda" : "demandas"}`}
+            </button>
+          }>
+          <div style={{ paddingBottom: 20 }}>
+            <div style={{ fontSize: 13, color: C.muted, marginBottom: 14 }}>Marque as que quer adiar e escolha o novo prazo. As desmarcadas não mudam.</div>
+            <Field label="Novo prazo"><TextInput type="date" value={novoPrazo} onChange={e => setNovoPrazo(e.target.value)} /></Field>
+            <div style={{ marginTop: 14 }}>
+              {listaAtrasadas.map(d => {
+                const marcado = adiarSel.includes(d.id);
+                return (
+                  <label key={d.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 0", borderTop: `1px solid ${C.border}`, cursor: "pointer" }}>
+                    <input type="checkbox" checked={marcado} onChange={() => setAdiarSel(sel => marcado ? sel.filter(x => x !== d.id) : [...sel, d.id])} style={{ width: 18, height: 18, accentColor: C.emerald }} />
+                    <span style={{ flex: 1, minWidth: 0, fontSize: 14, fontWeight: 600, color: C.ink }}>{d.nome}</span>
+                    <span style={{ fontSize: 11.5, color: C.coral, fontWeight: 700, flexShrink: 0 }}>{fmtDate(d.prazo)}</span>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+        </Modal>
+      )}
 
       {showForm && (
         <Modal
