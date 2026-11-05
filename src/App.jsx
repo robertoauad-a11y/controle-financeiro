@@ -490,6 +490,7 @@ const C = {
 };
 let shadowSm = "0 1px 3px rgba(0,0,0,0.35), 0 0 0 1px rgba(255,255,255,0.04)";
 let shadowMd = "0 10px 30px rgba(0,0,0,0.45), 0 0 0 1px rgba(255,255,255,0.05)";
+let shadowNav = "0 -8px 24px rgba(0,0,0,0.35)"; // sombra acima do menu inferior (no claro fica bem mais leve, senão vira uma faixa cinza)
 // Themes. "escuro" is the app's identity and the default. "claro": cards, text and accents all light
 // (the Saldo card on Início keeps its dark gradient in both themes).
 const C_ESCURO = { ...C, barCinza: "#5C6485", gradOut: ["#FF7A85", "#E8434F"], gradIn: ["#2CF0BD", "#00B98A"] };
@@ -517,6 +518,7 @@ function aplicarTema(modo) {
   PALETTE_IN = claro ? PAL_IN_CLARO : PAL_IN_ESCURO;
   shadowSm = claro ? "0 1px 2px rgba(20,27,52,0.08), 0 0 0 1px rgba(20,27,52,0.05)" : SHADOWS_ESCURO[0];
   shadowMd = claro ? "0 10px 28px rgba(20,27,52,0.14), 0 0 0 1px rgba(20,27,52,0.06)" : SHADOWS_ESCURO[1];
+  shadowNav = claro ? "0 -4px 14px rgba(20,27,52,0.06)" : "0 -8px 24px rgba(0,0,0,0.35)";
   // Style objects built once at load: refresh the parts that use the palette.
   Object.assign(inputStyle, { border: "1px solid " + C.border, background: C.card, color: C.ink });
   Object.assign(monthNavBtnStyle, { border: `1px solid ${C.border}`, background: C.card, color: C.ink });
@@ -1062,7 +1064,7 @@ function BottomNav({ tab, setTab }) {
   return (
     <nav style={{
       position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 40,
-      background: C.card, boxShadow: `0 -1px 0 ${C.border}, 0 -8px 24px rgba(0,0,0,0.35)`,
+      background: C.card, boxShadow: `0 -1px 0 ${C.border}, ${shadowNav}`,
       display: "flex", justifyContent: "space-around", padding: "10px 6px calc(10px + env(safe-area-inset-bottom))"
     }}>
       {NAV_ITEMS.map(item => {
@@ -2212,7 +2214,7 @@ function FixosModal({ fixos, custos, mes, onLancar, onAdd, onUpdate, onRemove, o
                   <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, fontWeight: 700, color: f.valor ? C.ink : C.faint }}>{f.valor ? fmtBRL(f.valor) : "valor varia"}</div>
                   {f.valorPago ? <div style={{ fontSize: 11, color: C.emerald }}>paga {fmtBRL(f.valorPago)}</div> : null}
                 </div>
-                <button type="button" onClick={() => onLancar(f, false)} style={{ border: `1px solid ${C.border}`, background: C.page, color: C.muted, borderRadius: 10, padding: "8px 12px", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>Lançar</button>
+                <button type="button" onClick={() => onLancar(f, false)} style={{ border: `1px solid ${C.border}`, background: C.page, color: C.inkSoft, borderRadius: 10, padding: "8px 12px", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>Lançar</button>
                 <button type="button" onClick={() => onLancar(f, true)} style={{ border: `1px solid ${C.emerald}`, background: C.emeraldSoft, color: C.emerald, borderRadius: 10, padding: "8px 12px", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>✓ Pago hoje</button>
               </div>
             ))}
@@ -2534,7 +2536,7 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
         pix={pixMes}
         saldo={kpis.saldo}
         trendAtual={saldoAteDiaAtual}
-        trendAnterior={saldoAteDiaAnterior}
+        trendAnterior={semLancamentos ? null : saldoAteDiaAnterior}
         mesLabel={mesLabel}
         hidden={hidden}
         onToggle={() => setHidden(h => !h)}
@@ -2557,11 +2559,11 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
         { icon: <Wallet size={12} />, label: "Previsto", value: hidden ? "•••" : fmtBRL(kpis.totalPrevisto) },
         {
           icon: <Check size={12} />, label: "Pago", value: hidden ? "•••" : fmtBRL(kpis.totalPago),
-          trend: pagoTrendPct !== null ? { pct: pagoTrendPct, good: pagoTrendPct <= 0 } : null
+          trend: !semLancamentos && pagoTrendPct !== null ? { pct: pagoTrendPct, good: pagoTrendPct <= 0 } : null
         },
         {
           icon: <PiggyBank size={12} />, label: "Recebido", value: hidden ? "•••" : fmtBRL(kpis.totalRecebido),
-          trend: recebidoTrendPct !== null ? { pct: recebidoTrendPct, good: recebidoTrendPct >= 0 } : null
+          trend: !semLancamentos && recebidoTrendPct !== null ? { pct: recebidoTrendPct, good: recebidoTrendPct >= 0 } : null
         },
       ]} />
 
@@ -2632,7 +2634,7 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
                 <DonutTotal total={porFonte.reduce((t, f) => t + f.value, 0)} hidden={hidden} />
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
-                    <Pie data={porFonte} dataKey="value" nameKey="name" innerRadius={37} outerRadius={55} paddingAngle={2}>
+                    <Pie data={porFonte} dataKey="value" nameKey="name" innerRadius={37} outerRadius={55} paddingAngle={porFonte.length > 1 ? 2 : 0}>
                       {porFonte.map((f) => <Cell key={f.name} fill={fonteColor(f.name)} />)}
                     </Pie>
                     <Tooltip content={<RichTooltip />} />
@@ -2664,7 +2666,7 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
                 <DonutTotal total={porCategoria.reduce((t, f) => t + f.value, 0)} hidden={hidden} />
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
-                    <Pie data={porCategoria} dataKey="value" nameKey="name" innerRadius={37} outerRadius={55} paddingAngle={2}>
+                    <Pie data={porCategoria} dataKey="value" nameKey="name" innerRadius={37} outerRadius={55} paddingAngle={porCategoria.length > 1 ? 2 : 0}>
                       {porCategoria.map((f) => <Cell key={f.name} fill={catColor(f.name)} />)}
                     </Pie>
                     <Tooltip content={<RichTooltip />} />
@@ -2767,7 +2769,12 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
                   </BarChart>
                 </ResponsiveContainer>
               </div>
-              {variacoes[0] && (
+              {variacoes[0] && ehMesCorrente && new Date().getDate() < 15 && (
+                <div style={{ fontSize: 12, color: C.faint, marginTop: 8 }}>
+                  Mês em andamento: a comparação ainda é parcial (até o dia {new Date().getDate()}).
+                </div>
+              )}
+              {variacoes[0] && !(ehMesCorrente && new Date().getDate() < 15) && (
                 <div style={{ fontSize: 12, color: C.muted, marginTop: 8 }}>
                   Maior variação: <strong style={{ color: C.ink }}>{variacoes[0].fonte}</strong>{" "}
                   <strong style={{ color: variacoes[0].delta > 0 ? C.coral : C.emerald }}>
@@ -2990,16 +2997,32 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
       if (!form.dataPagamento) faltam.push("Data Pagamento");
       if (faltam.length) { alert(`Este custo está como Pago. Preencha: ${faltam.join(" e ")}.\n\nSe ainda não foi pago, mude o Status para Pendente.`); return; }
     }
+    // Data de pagamento: erro de ano/mês (ex.: 03/12 em vez de 03/11) não pode passar batido. Só pergunta quando a data ou o status mudou.
+    const origCusto = editingId ? custos.find(c => c.id === editingId) : null;
+    if (form.status === "Pago" && form.dataPagamento) {
+      if (!(await confirmDateSanity(form.dataPagamento, "data de pagamento"))) return;
+      const mudouPgto = !origCusto || origCusto.status !== "Pago" || origCusto.dataPagamento !== form.dataPagamento;
+      if (mudouPgto && form.dataPagamento > todayISO() && !(await confirmar(`A data do pagamento (${fmtDate(form.dataPagamento)}) ainda não chegou. Marcar como Pago mesmo assim?`, { titulo: "Data no futuro", okLabel: "Está correta" }))) return;
+    }
     // Nome repetido: lançamento novo com a mesma descrição e a mesma fonte no mês (divisão em fontes diferentes não dispara).
     if (!editingId) {
       const igual = custos.find(c => c.mes === form.mes && normDesc(c.descricao) === normDesc(form.descricao) && c.fonte === form.fonte);
       if (igual && !(await confirmar(`Já existe "${igual.descricao}" em ${monthLabel(igual.mes)} com a fonte ${igual.fonte} (${fmtBRL(igual.valorPrevisto)}, ${igual.status}).\n\nSe for outra parte de um pagamento dividido, use outra fonte. Lançar mesmo assim?`, { titulo: "Possível duplicado", okLabel: "Lançar mesmo assim" }))) return;
     }
+    // Valor muito acima do mesmo custo no mês anterior (erro de vírgula, ex.: 17600 em vez de 176,00). Só dispara em salto de 3x ou mais e de pelo menos R$ 300.
+    if (!origCusto || Number(origCusto.valorPrevisto) !== valorPrevistoNum) {
+      const mesAntC = shiftMonth(form.mes, -1);
+      const baseC = Math.max(0, ...custos.filter(c => c.mes === mesAntC && normDesc(c.descricao) === normDesc(form.descricao)).map(c => Number(c.valorPrevisto || c.valorPago || 0)));
+      if (baseC > 0 && valorPrevistoNum >= baseC * 3 && valorPrevistoNum - baseC >= 300
+        && !(await confirmar(`O valor previsto (${fmtBRL(valorPrevistoNum)}) é mais de 3 vezes o de ${monthLabel(mesAntC)} (${fmtBRL(baseC)}) para "${form.descricao}".\n\nO valor está certo?`, { titulo: "Valor muito acima do normal", okLabel: "Está certo" }))) return;
+    }
     // Confirmação da fonte: ao marcar Pago (ou trocar a fonte de um custo já Pago), mostra o resumo antes de gravar.
     if (form.status === "Pago") {
-      const orig = editingId ? custos.find(c => c.id === editingId) : null;
+      const orig = origCusto;
       if (!orig || orig.status !== "Pago" || orig.fonte !== form.fonte) {
-        const resumo = `${form.descricao}\nValor pago: ${fmtBRL(valorPagoNum)}\nFonte: ${form.fonte}\nData do pagamento: ${fmtDate(form.dataPagamento)}`;
+        const difPg = valorPagoNum - valorPrevistoNum;
+        const linhaPrev = Math.abs(difPg) > 0.005 ? `\nPrevisto: ${fmtBRL(valorPrevistoNum)} (${difPg > 0 ? "+" : "−"}${fmtBRL(Math.abs(difPg))})` : "";
+        const resumo = `${form.descricao}\nValor pago: ${fmtBRL(valorPagoNum)}${linhaPrev}\nFonte: ${form.fonte}\nData do pagamento: ${fmtDate(form.dataPagamento)}`;
         if (!(await confirmar(`${resumo}\n\nA fonte está certa?`, { titulo: "Marcar como Pago?", okLabel: "Sim, confirmar" }))) return;
       }
     }
@@ -3120,7 +3143,7 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
           ? { icon: <Clock size={12}/>, label: "Falta pagar", value: fmtBRL(totals.faltaPagar), tone: totals.atrasados > 0 ? "red" : "gold" }
           : (filtrados.length > 0 && totals.diferenca < -0.005)
           ? { icon: <TrendingDown size={12}/>, label: "Economia", value: fmtBRL(-totals.diferenca), tone: "green" }
-          : { icon: totals.diferenca < 0 ? <TrendingDown size={12}/> : <TrendingUp size={12}/>, label: "Diferença", value: fmtBRL(totals.diferenca), tone: totals.diferenca > 0.005 ? "red" : undefined },
+          : { icon: totals.diferenca < 0 ? <TrendingDown size={12}/> : <TrendingUp size={12}/>, label: totals.diferenca > 0.005 ? "Acima do previsto" : "Diferença", value: fmtBRL(totals.diferenca), tone: totals.diferenca > 0.005 ? "red" : undefined },
         { icon: <Clock size={12} />, label: "Pago/Pend./Atr.", value: (
           <span>
             <span style={{ color: totals.pagos > 0 ? C.emerald : C.faint }}>{totals.pagos}</span>
@@ -3143,7 +3166,7 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
               <DonutTotal total={Object.values(totals.porFonte).reduce((t, v) => t + v, 0)} />
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
-                  <Pie data={Object.entries(totals.porFonte).map(([name,value])=>({name,value}))} dataKey="value" nameKey="name" innerRadius={36} outerRadius={58} paddingAngle={2}>
+                  <Pie data={Object.entries(totals.porFonte).map(([name,value])=>({name,value}))} dataKey="value" nameKey="name" innerRadius={36} outerRadius={58} paddingAngle={Object.keys(totals.porFonte).length > 1 ? 2 : 0}>
                     {Object.keys(totals.porFonte).map((f) => <Cell key={f} fill={fonteColor(f)} />)}
                   </Pie>
                   <Tooltip separator=": " formatter={(v) => fmtBRL(v)} contentStyle={{ borderRadius: 10, border: "none", background: C.card, boxShadow: shadowMd, fontSize: 12, color: C.ink }} itemStyle={{ color: C.ink }} labelStyle={{ color: C.muted }} />
@@ -3386,11 +3409,19 @@ function ReceitasTab({ receitas, onAdd, onRemove, onUpdate, inicioContagem }) {
       alert("Esta receita está como Recebida. Preencha o Valor Recebido.\n\nSe ainda não entrou, mude o Status para Pendente.");
       return;
     }
+    // Data de recebimento no futuro: só pergunta quando a data ou o status mudou.
+    const origRec = editingId ? receitas.find(r => r.id === editingId) : null;
+    if (form.status === "Recebido" && form.dataRecebimento) {
+      const mudouRec = !origRec || origRec.status !== "Recebido" || origRec.dataRecebimento !== form.dataRecebimento;
+      if (mudouRec && form.dataRecebimento > todayISO() && !(await confirmar(`A data do recebimento (${fmtDate(form.dataRecebimento)}) ainda não chegou. Marcar como Recebida mesmo assim?`, { titulo: "Data no futuro", okLabel: "Está correta" }))) return;
+    }
     // Confirmação da conta de destino: ao marcar Recebido (ou trocar a conta de uma receita já Recebida).
     if (form.status === "Recebido") {
-      const orig = editingId ? receitas.find(r => r.id === editingId) : null;
+      const orig = origRec;
       if (!orig || orig.status !== "Recebido" || orig.contaDestino !== form.contaDestino) {
-        const resumo = `${form.descricao}\nValor recebido: ${fmtBRL(valorRecebidoNum)}\nConta: ${form.contaDestino || "—"}\nData do recebimento: ${fmtDate(form.dataRecebimento)}`;
+        const difRc = valorRecebidoNum - valorPrevistoNum;
+        const linhaPrevR = Math.abs(difRc) > 0.005 ? `\nPrevisto: ${fmtBRL(valorPrevistoNum)} (${difRc > 0 ? "+" : "−"}${fmtBRL(Math.abs(difRc))})` : "";
+        const resumo = `${form.descricao}\nValor recebido: ${fmtBRL(valorRecebidoNum)}${linhaPrevR}\nConta: ${form.contaDestino || "—"}\nData do recebimento: ${fmtDate(form.dataRecebimento)}`;
         if (!(await confirmar(`${resumo}\n\nA conta está certa?`, { titulo: "Marcar como Recebida?", okLabel: "Sim, confirmar" }))) return;
       }
     }
@@ -3448,7 +3479,7 @@ function ReceitasTab({ receitas, onAdd, onRemove, onUpdate, inicioContagem }) {
                   <DonutTotal total={porConta.reduce((t, [, v]) => t + v, 0)} />
                   <ResponsiveContainer width="100%" height="100%">
                     <PieChart>
-                      <Pie data={porConta.map(([name, value]) => ({ name, value }))} dataKey="value" nameKey="name" innerRadius={36} outerRadius={58} paddingAngle={2}>
+                      <Pie data={porConta.map(([name, value]) => ({ name, value }))} dataKey="value" nameKey="name" innerRadius={36} outerRadius={58} paddingAngle={porConta.length > 1 ? 2 : 0}>
                         {porConta.map(([f]) => <Cell key={f} fill={fonteColor(f)} />)}
                       </Pie>
                       <Tooltip separator=": " formatter={(v) => fmtBRL(v)} contentStyle={{ borderRadius: 10, border: "none", background: C.card, boxShadow: shadowMd, fontSize: 12, color: C.ink }} itemStyle={{ color: C.ink }} labelStyle={{ color: C.muted }} />
@@ -3738,7 +3769,7 @@ function MonthDetailModal({ resumo, custos, receitas, onClose }) {
           <div style={{ width: 110, height: 110, flexShrink: 0 }}>
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
-                <Pie data={porFonte} dataKey="value" nameKey="name" innerRadius={30} outerRadius={52} paddingAngle={2}>
+                <Pie data={porFonte} dataKey="value" nameKey="name" innerRadius={30} outerRadius={52} paddingAngle={porFonte.length > 1 ? 2 : 0}>
                   {porFonte.map((f) => <Cell key={f.name} fill={fonteColor(f.name)} />)}
                 </Pie>
                 <Tooltip separator=": " formatter={(v) => fmtBRL(v)} contentStyle={{ borderRadius: 10, border: "none", background: C.card, boxShadow: shadowMd, fontSize: 12, color: C.ink }} itemStyle={{ color: C.ink }} labelStyle={{ color: C.muted }} />
@@ -3824,6 +3855,7 @@ function DemandasTab({ demandas, onAdd, onRemove, onUpdate, onStatusChange, jump
     e.preventDefault();
     if (saving) return;
     if (!form.nome) return;
+    if (form.prazo && !(await confirmDateSanity(form.prazo, "prazo"))) return;
     setSaving(true);
     try {
       if (editingId) {
