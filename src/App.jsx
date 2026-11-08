@@ -2,13 +2,13 @@ import React, { useState, useEffect, useMemo, useRef } from "react";
 import {
   Plus, Trash2, X, Wallet, TrendingUp, TrendingDown, ClipboardList,
   Calendar, Check, AlertCircle, Clock, Filter, ChevronDown, PiggyBank,
-  Home as HomeIcon, ArrowRight, Download, Pencil, Eye, EyeOff, Sun, Moon
+  Home as HomeIcon, ArrowRight, Download, Pencil, Eye, EyeOff, Sun, Moon, Bell
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import { auth, db } from "./firebase.js";
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from "firebase/auth";
 import { collection, doc, addDoc, updateDoc, deleteDoc, onSnapshot, writeBatch } from "firebase/firestore";
-import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, ReferenceLine, AreaChart, Area, LabelList } from "recharts";
+import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, ReferenceLine, AreaChart, Area, LabelList, CartesianGrid } from "recharts";
 
 /* ------------------------------------------------------------------ */
 /*  Firestore collections — one document per record. Never write an   */
@@ -532,6 +532,7 @@ let PALETTE_OUT = ["#FF5A68", "#FF8A3D", "#FFC53D", "#F472B6", "#A78BFA", "#38BD
 let PALETTE_IN = ["#00E0A8", "#22D3EE", "#4FA3FF", "#B5E655", "#818CF8", "#FDE047", "#F0ABFC", "#86EFAC"];
 // Cor fixa por fonte: "Conta Salário" tem sempre a mesma cor em qualquer gráfico ou mês.
 const fonteColor = (name) => PALETTE_OUT[Math.max(0, FONTES.indexOf(contaDaFonte(name))) % PALETTE_OUT.length];
+const fonteColorIn = (name) => PALETTE_IN[Math.max(0, FONTES.indexOf(contaDaFonte(name))) % PALETTE_IN.length];
 const STATUS_ACCENT = {
   "Pago": C.emerald, "Recebido": C.emerald, "Concluída": C.emerald,
   "Parcial": C.amber, "Em Andamento": C.amber, "Pendente": C.amber,
@@ -849,8 +850,14 @@ const NAV_ITEMS = [
 
 // Global action, not a screen: reachable from any tab, opens a sheet on top
 // of whatever the person is doing, and returns them there once confirmed.
-function QuickAddFab({ onAddCusto, onAddReceita, onAddDemanda, demandas = [], onResolveDemanda }) {
+function QuickAddFab({ onAddCusto, onAddReceita, onAddDemanda, demandas = [], onResolveDemanda, ocultarBotao = false }) {
   const [open, setOpen] = useState(false);
+  // Atalho "Rápido" do Início abre o mesmo lançamento rápido por texto.
+  useEffect(() => {
+    const abrir = () => setOpen(true);
+    window.addEventListener("pt-lancamento-rapido", abrir);
+    return () => window.removeEventListener("pt-lancamento-rapido", abrir);
+  }, []);
   const [step, setStep] = useState("input");
   const [text, setText] = useState("");
   const [draft, setDraft] = useState(null);
@@ -956,7 +963,7 @@ function QuickAddFab({ onAddCusto, onAddReceita, onAddDemanda, demandas = [], on
 
   return (
     <>
-      <button className="tap fab-rapido" onClick={() => setOpen(true)} title="Lançamento rápido" aria-hidden={escondido} tabIndex={escondido ? -1 : 0} style={{
+      {!ocultarBotao && <button className="tap fab-rapido" onClick={() => setOpen(true)} title="Lançamento rápido" aria-hidden={escondido} tabIndex={escondido ? -1 : 0} style={{
         position: "fixed", right: 8, bottom: "calc(88px + env(safe-area-inset-bottom))", zIndex: 42,
         width: 42, height: 42, borderRadius: 21, border: "none",
         background: C.emerald, color: "#0A0E1C", cursor: "pointer",
@@ -967,7 +974,7 @@ function QuickAddFab({ onAddCusto, onAddReceita, onAddDemanda, demandas = [], on
         transition: "transform .25s ease, opacity .2s ease"
       }}>
         <Plus size={21} strokeWidth={2.6} />
-      </button>
+      </button>}
 
       {open && step === "input" && (
         <Modal title="Lançamento rápido" onClose={reset}>
@@ -1164,6 +1171,9 @@ export default function App() {
 
   const loading = !(loadedFlags.custos && loadedFlags.receitas && loadedFlags.demandas);
   const data = useMemo(() => ({ custos, receitas, demandas }), [custos, receitas, demandas]);
+  const central = useCentralAvisos(custos, demandas, fixos, 14);
+  const nAtrasadosApp = central.nUrgentes;
+  const [pedirAtencao, setPedirAtencao] = useState(false);
   const receitasRenda = useMemo(() => receitas.filter(r => !ehDeposito(r)), [receitas]);
   const depositosRec = useMemo(() => receitas.filter(ehDeposito), [receitas]);
 
@@ -1339,6 +1349,82 @@ export default function App() {
   // greeting, so the name is set directly.
   const greeting = "Roberto";
   const hojeLabel = `${new Date().getDate()} de ${MESES[new Date().getMonth()].toLowerCase()}`;
+  const horaAgora = new Date().getHours();
+  const saudacao = horaAgora < 5 ? "Boa noite" : horaAgora < 12 ? "Bom dia" : horaAgora < 18 ? "Boa tarde" : "Boa noite";
+
+  // Conteúdo do topo (saudação, título, tema e menu): no Início ele vira a parte de cima do cartão de Saldo.
+  // Botões de tema e menu (iguais no herói escuro e na barra fina das outras abas).
+  const botoesApp = (claro) => {
+    const corBorda = claro ? C.border : "rgba(255,255,255,0.18)";
+    const corFundo = claro ? C.card : "rgba(255,255,255,0.08)";
+    const corIcone = claro ? C.inkSoft : "#D5DBF5";
+    return (
+          <div style={{ position: "relative", display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+            {claro && (
+              <button className="tap" onClick={() => { setTab("dashboard"); setPedirAtencao(true); }} aria-label={nAtrasadosApp > 0 ? `Central de avisos: ${nAtrasadosApp} precisam de atenção` : "Central de avisos: tudo em dia"}
+                style={{ position: "relative", width: 38, height: 38, borderRadius: 12, border: `1px solid ${corBorda}`, background: corFundo, color: nAtrasadosApp > 0 ? C.coral : corIcone, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <Bell size={16} />
+                {nAtrasadosApp > 0 && <span style={{ position: "absolute", top: -5, right: -5, minWidth: 17, height: 17, borderRadius: 9, background: C.coral, color: "#fff", fontSize: 10, fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 4px", boxSizing: "border-box" }}>{nAtrasadosApp > 99 ? "99+" : nAtrasadosApp}</span>}
+              </button>
+            )}
+            <button className="tap" onClick={() => window.dispatchEvent(new Event("pt-lancamento-rapido"))} aria-label="Lançamento rápido"
+              style={{ height: 38, borderRadius: 12, border: `1px solid ${claro ? C.emerald : "rgba(0,224,168,0.45)"}`, background: claro ? C.emeraldSoft : "rgba(0,224,168,0.12)", color: claro ? C.emerald : "#4FE8BE", cursor: "pointer", display: "flex", alignItems: "center", gap: 6, padding: "0 13px", fontSize: 12.5, fontWeight: 700, fontFamily: "inherit" }}>
+              <Plus size={16} strokeWidth={2.6} /> <span className="rapido-txt">Rápido</span>
+            </button>
+            <button className="tap" onClick={() => setMenuOpen(o => !o)} aria-label="Menu"
+              style={{ width: 38, height: 38, borderRadius: 12, border: `1px solid ${corBorda}`, background: corFundo, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <span style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                <span style={{ width: 4, height: 4, borderRadius: 2, background: corIcone }} />
+                <span style={{ width: 4, height: 4, borderRadius: 2, background: corIcone }} />
+                <span style={{ width: 4, height: 4, borderRadius: 2, background: corIcone }} />
+              </span>
+            </button>
+            {menuOpen && (
+              <>
+                <div onClick={() => setMenuOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 45 }} />
+                <div style={{
+                  position: "absolute", right: 0, top: 46, background: C.card, borderRadius: 14,
+                  boxShadow: shadowMd, padding: 6, zIndex: 46, width: 210, animation: "fadeIn .15s ease-out"
+                }}>
+                  <input ref={fileInputRef} type="file" accept=".xlsx,.xls" onChange={handleFileChange} style={{ display: "none" }} />
+                  <button onClick={() => { setMenuOpen(false); handleImportClick(); }} style={menuItemStyle}>
+                    <Download size={15} style={{ transform: "rotate(180deg)" }} /> Importar Excel
+                  </button>
+                  <button onClick={() => { setMenuOpen(false); exportToExcel(data); }} style={menuItemStyle}>
+                    <Download size={15} /> Exportar Excel
+                  </button>
+                  <div style={{ height: 1, background: C.border, margin: "4px 6px" }} />
+                  <button onClick={() => { setMenuOpen(false); escolherTema(temaAtual === "claro" ? "escuro" : "claro"); }} style={menuItemStyle}>
+                    {temaAtual === "claro" ? <Moon size={15} /> : <Sun size={15} />} {temaAtual === "claro" ? "Usar tema escuro" : "Usar tema claro"}
+                  </button>
+                  <button onClick={() => escolherTema(temaPref === "auto" ? temaAtual : "auto")} style={menuItemStyle}>
+                    <Sun size={15} /> Tema automático
+                    {temaPref === "auto" && <Check size={15} color={C.emerald} style={{ marginLeft: "auto" }} />}
+                  </button>
+                  <div style={{ height: 1, background: C.border, margin: "4px 6px" }} />
+                  <button onClick={() => { setMenuOpen(false); handleLogout(); }} style={{ ...menuItemStyle, color: C.coral }}>
+                    <X size={15} /> Sair
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+    );
+  };
+
+  const topoApp = (
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 12.5, color: "#B8C2E8", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.6 }}>
+              {saudacao}, {greeting} · {hojeLabel}
+            </div>
+            <div style={{ fontFamily: "'Fraunces', serif", fontWeight: 700, fontSize: "clamp(30px, 9vw, 38px)", letterSpacing: -1, color: "#F3F5FA", lineHeight: 1, marginTop: 6 }}>
+              Pauta Tutti
+            </div>
+          </div>
+          {botoesApp(false)}
+        </div>
+  );
 
   return (
     <div key={temaAtual} style={{ minHeight: "100vh", background: C.page, fontFamily: "'Inter', sans-serif", paddingBottom: 150 }}>
@@ -1358,109 +1444,54 @@ export default function App() {
           .tap:hover { filter: brightness(1.08); transform: translateY(-1px); }
         }
         .tap:active { transform: scale(0.96); }
+        @keyframes ptPulse { 0% { transform: scale(1); } 30% { transform: scale(1.14); } 60% { transform: scale(1); } 80% { transform: scale(1.08); } 100% { transform: scale(1); } }
         @keyframes fadeInUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
         .in { animation: fadeInUp .4s cubic-bezier(.22,1,.36,1) backwards; }
+        @media (max-width: 440px) { .rapido-txt { display: none; } }
         .grid2 { display: grid; grid-template-columns: 1fr; gap: 20px; }
         @media (min-width: 680px) { .grid2 { grid-template-columns: 1fr 1fr; } .grid2 > * { margin-bottom: 0 !important; } }
         @media (min-width: 1100px) { .grid2 { grid-template-columns: 1fr 1fr 1fr; } }
         input[type="date"]::-webkit-date-and-time-value, input[type="month"]::-webkit-date-and-time-value { text-align: left; }
         .grid2c { display: grid; grid-template-columns: 1fr; gap: 20px; }
         @media (min-width: 680px) { .grid2c { grid-template-columns: 1fr 1fr; } .grid2c > * { margin-bottom: 0 !important; } }
-        @media (min-width: 760px) { .kanban { grid-template-columns: 1fr 1fr 1fr !important; } }
+        @media (min-width: 760px) { .kanban { grid-template-columns: var(--kcols, 1fr 1fr 1fr) !important; } }
       `}</style>
 
-      {/* Header — same elevated card surface as everything else, not floating text */}
-      <div style={{ padding: "16px 20px 0" }}>
-        <header style={{
-          maxWidth: 1080, margin: "0 auto", background: C.card, boxShadow: shadowSm,
-          borderRadius: 20, padding: "16px 18px"
-        }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-            <div style={{
-              width: 42, height: 42, borderRadius: 13, background: C.emeraldSoft,
-              display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0
-            }}>
-              <Wallet size={20} color={C.emerald} strokeWidth={2.2} />
-            </div>
-            <div>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span style={{ fontSize: 12.5, color: C.muted, fontWeight: 600 }}>Olá, {greeting} 👋</span>
-                <span style={{
-                  fontSize: 10.5, fontWeight: 700, color: C.faint, background: C.border,
-                  borderRadius: 8, padding: "1px 7px"
-                }}>
-                  {hojeLabel}
-                </span>
-              </div>
-              <div style={{ fontFamily: "'Fraunces', serif", fontWeight: 700, fontSize: 22, color: C.ink, marginTop: 2 }}>
-                Pauta Tutti
-              </div>
-            </div>
+      {tab !== "dashboard" && (
+      <div style={{ padding: "14px 20px 0" }}>
+        <header style={{ position: "relative", maxWidth: 1080, margin: "0 auto", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, padding: "13px 14px 13px 18px", borderRadius: 20, background: C.card, border: `1px solid ${C.border}`, boxShadow: shadowSm }}>
+          <div aria-hidden="true" style={{ position: "absolute", inset: 0, overflow: "hidden", borderRadius: "inherit", pointerEvents: "none" }}>
+            <svg width="100%" height="100%" style={{ position: "absolute", inset: 0 }}>
+              {[0, 1, 2, 3, 4].map(i => <line key={i} x1="0" x2="100%" y1={`${22 + i * 14}%`} y2={`${22 + i * 14}%`} stroke={C.lavender} strokeOpacity="0.14" strokeWidth="1" />)}
+              {[["46%", 3, 0], ["53%", 2, 1], ["60%", 4, 0], ["67%", 1, 1]].map(([x, linha, inv], k) => (
+                <g key={k} fill={C.emerald} fillOpacity="0.22" stroke={C.emerald} strokeOpacity="0.22">
+                  <ellipse cx={x} cy={`${22 + linha * 14}%`} rx="4.5" ry="3.3" />
+                </g>
+              ))}
+            </svg>
+            <div style={{ position: "absolute", top: -50, right: -40, width: 150, height: 150, borderRadius: "50%", background: `radial-gradient(circle, ${C.emeraldGlow} 0%, transparent 70%)`, opacity: 0.6 }} />
           </div>
-          <div style={{ position: "relative", display: "flex", alignItems: "center", gap: 8 }}>
-            <button className="tap" onClick={() => escolherTema(temaAtual === "claro" ? "escuro" : "claro")}
-              aria-label={temaAtual === "claro" ? "Mudar para o tema escuro" : "Mudar para o tema claro"}
-              style={{
-                width: 40, height: 40, borderRadius: 12, border: `1px solid ${C.border}`, background: C.card,
-                boxShadow: shadowSm, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer"
-              }}>
-              {temaAtual === "claro" ? <Moon size={18} color={C.ink} /> : <Sun size={18} color={C.ink} />}
-            </button>
-            <button className="tap" onClick={() => setMenuOpen(o => !o)} style={{
-              width: 40, height: 40, borderRadius: 12, border: `1px solid ${C.border}`, background: C.card,
-              boxShadow: shadowSm, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer"
-            }}>
-              <span style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-                <span style={{ width: 4, height: 4, borderRadius: 2, background: C.ink }} />
-                <span style={{ width: 4, height: 4, borderRadius: 2, background: C.ink }} />
-                <span style={{ width: 4, height: 4, borderRadius: 2, background: C.ink }} />
-              </span>
-            </button>
-            {menuOpen && (
-              <>
-                <div onClick={() => setMenuOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 45 }} />
-                <div style={{
-                  position: "absolute", right: 0, top: 46, background: C.card, borderRadius: 14,
-                  boxShadow: shadowMd, padding: 6, zIndex: 46, width: 200, animation: "fadeIn .15s ease-out"
-                }}>
-                  <input ref={fileInputRef} type="file" accept=".xlsx,.xls" onChange={handleFileChange} style={{ display: "none" }} />
-                  <button onClick={() => { setMenuOpen(false); handleImportClick(); }} style={menuItemStyle}>
-                    <Download size={15} style={{ transform: "rotate(180deg)" }} /> Importar Excel
-                  </button>
-                  <button onClick={() => { setMenuOpen(false); exportToExcel(data); }} style={menuItemStyle}>
-                    <Download size={15} /> Exportar Excel
-                  </button>
-                  <div style={{ height: 1, background: C.border, margin: "4px 6px" }} />
-                  <div style={{ padding: "6px 8px 4px", fontSize: 10.5, fontWeight: 700, color: C.muted, textTransform: "uppercase", letterSpacing: 0.5 }}>Tema</div>
-                  <div style={{ display: "flex", gap: 4, padding: "0 4px 6px" }}>
-                    {[["escuro", "Escuro"], ["claro", "Claro"], ["auto", "Auto"]].map(([k, t]) => (
-                      <button key={k} type="button" onClick={() => escolherTema(k)} style={{ flex: 1, border: `1px solid ${temaPref === k ? C.emerald : C.border}`, background: temaPref === k ? C.emeraldSoft : "transparent", color: temaPref === k ? C.emerald : C.muted, borderRadius: 9, padding: "7px 0", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>{t}</button>
-                    ))}
-                  </div>
-                  <div style={{ height: 1, background: C.border, margin: "4px 6px" }} />
-                  <button onClick={() => { setMenuOpen(false); handleLogout(); }} style={{ ...menuItemStyle, color: C.coral }}>
-                    <X size={15} /> Sair
-                  </button>
-                </div>
-              </>
-            )}
+          <div style={{ position: "relative", display: "flex", alignItems: "baseline", gap: 10, minWidth: 0 }}>
+            <span style={{ width: 10, height: 10, borderRadius: 5, background: "linear-gradient(135deg, #00E0A8, #9AA5D1)", alignSelf: "center", flexShrink: 0 }} />
+            <span style={{ fontSize: 15, fontWeight: 800, letterSpacing: 1.3, whiteSpace: "nowrap", flexShrink: 0, textTransform: "uppercase", background: `linear-gradient(90deg, ${C.emerald}, ${C.lavender})`, WebkitBackgroundClip: "text", backgroundClip: "text", color: "transparent", WebkitTextFillColor: "transparent" }}>Pauta Tutti</span>
+            <span style={{ fontSize: 12, color: C.muted, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{saudacao}, {greeting}</span>
           </div>
-        </div>
-      </header>
+          <div style={{ position: "relative" }}>{botoesApp(true)}</div>
+        </header>
       </div>
+      )}
 
       <main style={{ maxWidth: 1080, margin: "0 auto", padding: "20px 20px 0" }}>
-        {tab === "dashboard" && <DashboardTab custos={data.custos} receitas={receitasRenda} depositos={depositosRec} demandas={data.demandas} onNavigate={goToItem} onConcluirDemanda={(id) => updateDemandaStatus(id, "Concluída")} inicioContagem={inicioContagem} fixos={fixos} />}
+        {tab === "dashboard" && <DashboardTab custos={data.custos} receitas={receitasRenda} depositos={depositosRec} demandas={data.demandas} onNavigate={goToItem} onConcluirDemanda={(id) => updateDemandaStatus(id, "Concluída")} inicioContagem={inicioContagem} fixos={fixos} topo={topoApp} pedirAtencao={pedirAtencao} onConsumePedido={() => setPedirAtencao(false)} central={central} />}
         {tab === "custos" && <CustosTab fixos={fixos} fixosErro={fixosErro} onAddFixo={addFixo} onUpdateFixo={updateFixo} onRemoveFixo={removeFixo} custos={data.custos} onAdd={addCusto} onRemove={removeCusto} onUpdate={updateCusto} jumpTarget={jumpTarget && jumpTarget.tab === "custos" ? jumpTarget : null} onConsumeJump={() => setJumpTarget(null)} />}
-        {tab === "receitas" && <ReceitasTab receitas={data.receitas} onAdd={addReceita} onRemove={removeReceita} onUpdate={updateReceita} inicioContagem={inicioContagem} />}
+        {tab === "receitas" && <ReceitasTab receitas={data.receitas} onAdd={addReceita} onRemove={removeReceita} onUpdate={updateReceita} inicioContagem={inicioContagem} jumpTarget={jumpTarget && jumpTarget.tab === "receitas" ? jumpTarget : null} onConsumeJump={() => setJumpTarget(null)} />}
         {tab === "resumo" && <ResumoTab custos={data.custos} receitas={receitasRenda} inicioContagem={inicioContagem} onChangeInicio={mudarInicioContagem} />}
         {tab === "demandas" && <DemandasTab demandas={data.demandas} onAdd={addDemanda} onRemove={removeDemanda} onUpdate={updateDemanda} onStatusChange={updateDemandaStatus} jumpTarget={jumpTarget && jumpTarget.tab === "demandas" ? jumpTarget : null} onConsumeJump={() => setJumpTarget(null)} />}
       </main>
 
       <BottomNav tab={tab} setTab={setTab} />
       <ConfirmHost />
-      <QuickAddFab onAddCusto={addCusto} onAddReceita={addReceita} onAddDemanda={addDemanda} demandas={data.demandas} onResolveDemanda={(id) => updateDemandaStatus(id, "Concluída")} />
+      <QuickAddFab onAddCusto={addCusto} onAddReceita={addReceita} onAddDemanda={addDemanda} demandas={data.demandas} onResolveDemanda={(id) => updateDemandaStatus(id, "Concluída")} ocultarBotao={true} />
 
       {saveError && (
         <div style={{
@@ -1541,7 +1572,7 @@ function SeletorMes({ mes, onPick, onClose }) {
   );
 }
 
-function BalanceHero({ pix, saldo, trendAtual, trendAnterior, mesLabel, hidden, onToggle, saldosPorMes, porFonte, expanded, onToggleExpanded, inicioIdx = 0, mesIdxVisto = new Date().getMonth(), ehMesCorrente = true, onPickMes, onAbrirSeletor, semLancamentos = false, mesAnteriorLabel = "", onVerAnterior }) {
+function BalanceHero({ pix, saldo, trendAtual, trendAnterior, mesLabel, hidden, onToggle, saldosPorMes, porFonte, expanded, onToggleExpanded, inicioIdx = 0, mesIdxVisto = new Date().getMonth(), ehMesCorrente = true, onPickMes, onAbrirSeletor, semLancamentos = false, mesAnteriorLabel = "", onVerAnterior, contasLinha = [], topo = null, situacao = [], curva = null, atencao = null }) {
   // Scale only by the months that count (from "contar a partir de" on), so older
   // months with incomplete history can't flatten the ones that matter.
   const maxAbs = Math.max(1, ...saldosPorMes.filter((_, i) => i >= inicioIdx).map(s => Math.abs(s)));
@@ -1553,30 +1584,38 @@ function BalanceHero({ pix, saldo, trendAtual, trendAnterior, mesLabel, hidden, 
   const saldoDiffBruto = trendAnterior !== null ? trendAtual - trendAnterior : null;
   const saldoDiff = saldoDiffBruto !== null && Math.abs(saldoDiffBruto) < 0.005 ? null : saldoDiffBruto; // sem diferença, sem rótulo
   const trendPct = (trendAnterior !== null && trendAnterior > 0) ? (saldoDiff / trendAnterior) * 100 : null;
+  const estiloLinkAtencao = { border: "none", background: "transparent", padding: 0, fontSize: 12.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.6, display: "inline-flex", alignItems: "center", gap: 7, fontFamily: "inherit" };
+  const linkAtencao = !atencao ? null : atencao.n > 0 ? (
+    <button type="button" className="tap" onClick={atencao.onOpen} style={{ ...estiloLinkAtencao, cursor: "pointer", color: "#FF8A76", animation: atencao.pulsar ? "ptPulse 1.2s ease-out 1" : "none" }}>
+      <span style={{ minWidth: 22, height: 22, borderRadius: 11, background: "#FF5A68", color: "#fff", fontSize: 12, display: "inline-flex", alignItems: "center", justifyContent: "center", padding: "0 6px", letterSpacing: 0 }}>{atencao.n}</span>
+      {atencao.n === 1 ? "precisa" : "precisam"} de atenção ›
+    </button>
+  ) : (
+    <span style={{ ...estiloLinkAtencao, color: "#4FE8BE" }}>Tudo em dia ✓</span>
+  );
   return (
     <div className="in" style={{
       background: `linear-gradient(150deg, #0B0F1F 0%, #101632 55%, #0F3D33 100%)`,
-      borderRadius: 28, padding: "32px 26px", marginBottom: 24,
+      borderRadius: 28, padding: topo ? "24px 24px 26px" : "32px 26px", marginBottom: 24,
       boxShadow: "0 20px 48px rgba(11,15,31,0.35), 0 6px 16px rgba(11,15,31,0.2)",
-      position: "relative", overflow: "hidden"
+      position: "relative",
+      ...(topo ? { border: "5px solid transparent", background: "linear-gradient(150deg, #0B0F1F 0%, #101632 55%, #0F3D33 100%) padding-box, linear-gradient(135deg, #00E0A8, #9AA5D1) border-box" } : {})
     }}>
-      <div style={{
-        position: "absolute", top: -70, right: -60, width: 220, height: 220, borderRadius: "50%",
-        background: `radial-gradient(circle, ${C.emeraldGlow} 0%, transparent 70%)`
-      }} />
+      <div style={{ position: "absolute", inset: 0, overflow: "hidden", borderRadius: "inherit", pointerEvents: "none" }}>
+        <div style={{
+          position: "absolute", top: -70, right: -60, width: 220, height: 220, borderRadius: "50%",
+          background: `radial-gradient(circle, ${C.emeraldGlow} 0%, transparent 70%)`
+        }} />
+      </div>
+      {topo && <div style={{ position: "relative", zIndex: 3, marginBottom: 22, paddingBottom: 20, borderBottom: "1px solid rgba(255,255,255,0.12)" }}>{topo}</div>}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", position: "relative" }}>
         <div className="tap" onClick={onToggleExpanded} style={{ cursor: "pointer", flex: 1, minWidth: 0 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
             <span style={{ fontSize: 12.5, color: C.lavender, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.6 }}>Saldo de {mesLabel}</span>
-            {trendPct !== null ? (
-              <span style={{ display: "flex", alignItems: "center", gap: 2, fontSize: 10.5, fontWeight: 700, color: trendPct >= 0 ? "#4FE8BE" : "#FF8A76" }}>
-                {trendPct >= 0 ? <TrendingUp size={11} /> : <TrendingDown size={11} />}
-                {Math.abs(trendPct).toFixed(0)}% vs mês ant.{ehMesCorrente ? " até hoje" : ""}
-              </span>
-            ) : saldoDiff !== null && (
-              <span style={{ display: "flex", alignItems: "center", gap: 2, fontSize: 10.5, fontWeight: 700, color: saldoDiff >= 0 ? "#4FE8BE" : "#FF8A76" }}>
+            {saldoDiff !== null && (
+              <span style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 10.5, fontWeight: 700, color: saldoDiff >= 0 ? "#4FE8BE" : "#FF8A76" }}>
                 {saldoDiff >= 0 ? <TrendingUp size={11} /> : <TrendingDown size={11} />}
-                {hidden ? "•••" : fmtBRL(Math.abs(saldoDiff))} vs mês ant.{ehMesCorrente ? " até hoje" : ""}
+                {hidden ? "•••" : fmtBRL(Math.abs(saldoDiff))} {saldoDiff >= 0 ? "acima" : "abaixo"} do mês ant.{ehMesCorrente ? " até hoje" : ""}
               </span>
             )}
           </div>
@@ -1586,6 +1625,23 @@ function BalanceHero({ pix, saldo, trendAtual, trendAnterior, mesLabel, hidden, 
           }}>
             {hidden ? "R$ •••••" : fmtBRL(saldo)}
           </div>
+          {!hidden && contasLinha.length > 1 && (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 12 }}>
+              {contasLinha.map(c => (
+                <span key={c.fonte} style={{ fontSize: 11.5, fontWeight: 600, fontVariantNumeric: "tabular-nums", borderRadius: 999, padding: "4px 10px", background: "rgba(255,255,255,0.07)", border: "1px solid rgba(255,255,255,0.1)", color: "#B8BFDB" }}>
+                  {c.fonte === "Conta Salário" ? "CS" : c.fonte === "Conta Corrente" ? "CC" : c.fonte}{" "}
+                  <strong style={{ color: c.saldo < 0 ? "#FF8A76" : "#4FE8BE" }}>{c.saldo < 0 ? "−" : "+"}{fmtBRL(Math.abs(c.saldo)).replace("R$", "").trim()}</strong>
+                </span>
+              ))}
+            </div>
+          )}
+          {!hidden && situacao.length > 0 && (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 14px", marginTop: 12, fontSize: 12, fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>
+              {situacao.map((x, i) => x.onClick
+                ? <button key={i} type="button" className="tap" onClick={x.onClick} style={{ border: "none", background: "transparent", padding: 0, font: "inherit", color: x.cor, cursor: "pointer" }}>{x.t}</button>
+                : <span key={i} style={{ color: x.cor }}>{x.t}</span>)}
+            </div>
+          )}
         </div>
         <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 8, flexShrink: 0 }}>
         <div style={{ display: "flex", gap: 8 }}>
@@ -1593,7 +1649,7 @@ function BalanceHero({ pix, saldo, trendAtual, trendAnterior, mesLabel, hidden, 
             width: 38, height: 38, borderRadius: 12, border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.06)",
             color: C.lavender, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
           }}>
-            <Plus size={16} style={{ transform: expanded ? "rotate(45deg)" : "none", transition: "transform .2s ease" }} />
+            <ChevronDown size={17} style={{ transform: expanded ? "rotate(180deg)" : "none", transition: "transform .2s ease" }} />
           </button>
           <button className="tap" onClick={onToggle} style={{
             width: 38, height: 38, borderRadius: 12, border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.06)",
@@ -1602,34 +1658,63 @@ function BalanceHero({ pix, saldo, trendAtual, trendAnterior, mesLabel, hidden, 
             {hidden ? <EyeOff size={16} /> : <Eye size={16} />}
           </button>
         </div>
-        <button className="tap" onClick={onAbrirSeletor} aria-label="Escolher o mês" title="Escolher o mês" style={{
-          width: 38, height: 38, borderRadius: 12, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
-          border: `1px solid ${ehMesCorrente ? "rgba(255,255,255,0.12)" : "#4FE8BE"}`, background: ehMesCorrente ? "rgba(255,255,255,0.06)" : "rgba(79,232,190,0.14)",
-          color: ehMesCorrente ? C.lavender : "#4FE8BE"
-        }}>
-          <Calendar size={16} />
-        </button>
         </div>
       </div>
-      <div style={{ display: "flex", alignItems: "center", gap: 5, height: 56, marginTop: 26, position: "relative" }}>
-        {saldosPorMes.map((s, i) => {
-          const fora = i < inicioIdx;
-          const h = s === 0 ? 2 : fora ? Math.min(6, Math.max(3, (Math.abs(s) / maxAbs) * 24)) : Math.max(3, (Math.abs(s) / maxAbs) * 24);
-          const positive = s >= 0;
-          const atualMes = i === mesIdxVisto;
-          const larg = atualMes ? 12 : 6;
-          return (
-            <div key={i} className="tap" onClick={() => onPickMes && onPickMes(i)} title={MESES[i]} style={{ display: "flex", flexDirection: "column", alignItems: "center", flex: 1, gap: 3, opacity: fora ? 0.35 : 1, cursor: onPickMes ? "pointer" : "default" }}>
-              <div style={{ height: 24, width: "100%", display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
-                <div style={{ width: larg, borderRadius: "3px 3px 0 0", height: positive ? h : 2, background: positive ? "#4FE8BE" : "rgba(255,255,255,0.12)" }} />
-              </div>
-              <div style={{ height: 24, width: "100%", display: "flex", alignItems: "flex-start", justifyContent: "center" }}>
-                <div style={{ width: larg, borderRadius: "0 0 3px 3px", height: positive ? 2 : h, background: positive ? "rgba(255,255,255,0.12)" : "#FF8A76" }} />
-              </div>
-              <span style={{ fontSize: 8.5, color: atualMes ? "#4FE8BE" : "#7C86AD", fontWeight: atualMes ? 800 : 600 }}>{MESES_ABR[i]}</span>
+      <div style={{ position: "relative", marginTop: 22 }}>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+          {MESES_ABR.map((m, i) => {
+            if (i < inicioIdx || i > Math.max(mesIdxVisto, new Date().getMonth())) return null;
+            const sel = i === mesIdxVisto;
+            return (
+              <button key={i} type="button" className="tap" onClick={() => onPickMes && onPickMes(i)} title={MESES[i]}
+                style={{ border: `1px solid ${sel ? "#4FE8BE" : "rgba(255,255,255,0.14)"}`, background: sel ? "rgba(79,232,190,0.16)" : "rgba(255,255,255,0.05)", color: sel ? "#4FE8BE" : "#B8BFDB", borderRadius: 999, padding: "6px 13px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>{m}</button>
+            );
+          })}
+          <button type="button" className="tap" onClick={onAbrirSeletor} aria-label="Escolher outro mês"
+            style={{ border: `1px solid ${ehMesCorrente ? "rgba(255,255,255,0.14)" : "rgba(255,255,255,0.14)"}`, background: "transparent", color: "#8B93B5", borderRadius: 999, padding: "6px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Outro mês</button>
+        </div>
+        {curva && curva.rows.length > 1 && (
+          <>
+            <div style={{ height: 96, marginTop: 16 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={curva.rows} margin={{ top: 8, right: 8, left: 8, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id="gCurva" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor={saldo < 0 ? "#FF8A76" : "#4FE8BE"} stopOpacity={0.35} /><stop offset="100%" stopColor={saldo < 0 ? "#FF8A76" : "#4FE8BE"} stopOpacity={0.02} />
+                    </linearGradient>
+                  </defs>
+                  <XAxis dataKey="dia" hide />
+                  <YAxis hide domain={["dataMin", "dataMax"]} />
+                  <ReferenceLine y={0} stroke="rgba(255,255,255,0.2)" strokeDasharray="3 3" />
+                  <Tooltip cursor={{ stroke: "rgba(255,255,255,0.25)", strokeWidth: 1 }} content={({ active, payload, label }) => (active && payload && payload.length) ? (
+                    <div style={{ background: "#0B0F1F", border: "1px solid rgba(255,255,255,0.16)", borderRadius: 10, padding: "7px 10px", fontSize: 11.5, color: "#F3F5FA" }}>
+                      <div style={{ color: "#8B93B5", fontWeight: 700, marginBottom: 2 }}>Dia {label}</div>
+                      {payload.filter(x => x.value != null).map(x => (
+                        <div key={x.dataKey} style={{ display: "flex", gap: 10, justifyContent: "space-between" }}>
+                          <span style={{ color: "#B8BFDB" }}>{x.dataKey === "atual" ? "Este mês" : "Mês anterior"}</span>
+                          <strong style={{ fontVariantNumeric: "tabular-nums" }}>{hidden ? "•••" : fmtBRL(x.value)}</strong>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null} />
+                  <Area type="stepAfter" dataKey="anterior" stroke="#7C86AD" strokeWidth={1.5} strokeDasharray="4 4" fill="none" dot={false} isAnimationActive={false} />
+                  <Area type="stepAfter" dataKey="atual" stroke={saldo < 0 ? "#FF8A76" : "#4FE8BE"} strokeWidth={2.5} fill="url(#gCurva)" connectNulls={false} isAnimationActive={false}
+                    dot={(p) => (p.payload && p.payload.dia === curva.hojeDia && p.cx != null)
+                      ? <circle key="hoje" cx={p.cx} cy={p.cy} r={5} fill={saldo < 0 ? "#FF8A76" : "#4FE8BE"} stroke="#fff" strokeWidth={2} />
+                      : <g key={"g" + p.index} />} />
+                </AreaChart>
+              </ResponsiveContainer>
             </div>
-          );
-        })}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, marginTop: 8 }}>
+              <div style={{ display: "flex", gap: 16, fontSize: 10.5, color: "#7C86AD", fontWeight: 600 }}>
+                <span style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ width: 14, height: 2.5, borderRadius: 2, background: saldo < 0 ? "#FF8A76" : "#4FE8BE" }} />saldo dia a dia</span>
+                <span style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ width: 14, borderTop: "2px dashed #7C86AD" }} />mês anterior</span>
+              </div>
+              {linkAtencao}
+            </div>
+          </>
+        )}
+        {!(curva && curva.rows.length > 1) && linkAtencao && <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 14 }}>{linkAtencao}</div>}
       </div>
 
       {semLancamentos && (
@@ -1715,7 +1800,7 @@ function useAtencao(custos, demandas, dias = 7) {
     };
     const itensCusto = custos
       .filter(c => c.status !== "Pago" && c.vencimento)
-      .map(c => ({ id: `c-${c.id}`, rawId: c.id, tab: "custos", label: c.descricao, data: c.vencimento, dateObj: toDateObj(c.vencimento) }))
+      .map(c => ({ id: `c-${c.id}`, rawId: c.id, tab: "custos", label: c.descricao, valor: Number(c.valorPrevisto || 0), data: c.vencimento, dateObj: toDateObj(c.vencimento) }))
       .filter(i => i.dateObj && i.dateObj <= limite);
     const itensDemanda = demandas
       .filter(d => d.status !== "Concluída" && d.prazo)
@@ -1770,14 +1855,54 @@ const diasAteVenc = (iso) => {
 };
 
 // Agenda: "qua 19/11 · 10:00 · em 20 dias" (hoje/amanhã por extenso).
+// Central de avisos: atrasados + o que vence nos próximos 14 dias (custos, tarefas e fixos ainda não lançados). Só leitura.
+function useCentralAvisos(custos, demandas, fixos, dias = 14) {
+  const base = useAtencao(custos, demandas, dias);
+  return useMemo(() => {
+    const mes = currentMonth();
+    const lista = base.map(i => ({
+      id: i.id, tipo: i.tab === "demandas" ? "Tarefa" : "Custo", label: i.label, data: i.data, tab: i.tab, rawId: i.rawId,
+      valor: i.tab === "custos" ? i.valor : null, atrasado: i.atrasado,
+      sub: i.atrasado ? fmtAtraso(i.diasAtraso) : rotuloAgenda(i)
+    }));
+    (fixos && fixos.length ? fixosPendentes(fixos, custos, mes).faltam : []).forEach(f => {
+      const data = vencimentoDoFixo(f, mes);
+      const d = diasAteVenc(data);
+      if (d === null || d > dias) return;
+      const v = Number(f.valorPago || f.valor || 0);
+      lista.push({
+        id: `f-${f.id || f.descricao}`, tipo: "Fixo", label: f.descricao, data, fixo: true, valor: v > 0 ? v : null, atrasado: d < 0,
+        sub: d < 0 ? `a lançar · venceu dia ${data.slice(8, 10)}` : d === 0 ? "a lançar · vence hoje" : d === 1 ? "a lançar · vence amanhã" : `a lançar · vence em ${d} dias`
+      });
+    });
+    lista.sort((a, b) => String(a.data).localeCompare(String(b.data)) || String(a.label).localeCompare(String(b.label)));
+    return { itens: lista, nUrgentes: lista.filter(i => diasAteVenc(i.data) <= 0).length };
+  }, [base, custos, fixos, dias]);
+}
 const rotuloAgenda = (item) => {
   const [y, m, d] = String(item.data).split("-").map(Number);
   const dow = ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"][new Date(y, m - 1, d).getDay()];
   const quando = item.diasFalta === 0 ? "hoje" : item.diasFalta === 1 ? "amanhã" : `em ${item.diasFalta} dias`;
   return `${dow} ${fmtDate(item.data).slice(0, 5)}${item.hora ? " · " + item.hora : ""} · ${quando}`;
 };
-function AttentionCard({ itens, onNavigate, onConcluirDemanda, title = "Precisa de atenção", limit = 6, emptyText, okWhenEmpty = false, neutro = false, agenda = false, flush = false }) {
+function AttentionCard({ itens, onNavigate, onConcluirDemanda, title = "Precisa de atenção", limit = 6, emptyText, okWhenEmpty = false, neutro = false, agenda = false, flush = false, recolhivel = false, onPagar = null, semCabecalho = false }) {
   const [aberto, setAberto] = useState(false);
+  // Recolhível: começa fechado (a escolha fica guardada neste aparelho) e abre sozinho se aparecer um atraso novo.
+  const [recolhido, setRecolhido] = useState(() => {
+    if (!recolhivel) return false;
+    try { return localStorage.getItem("pt_atencao_aberta") !== "1"; } catch (e) { return true; }
+  });
+  const qtdAnterior = useRef(itens.length);
+  useEffect(() => {
+    if (recolhivel && itens.length > qtdAnterior.current) setRecolhido(false);
+    qtdAnterior.current = itens.length;
+  }, [itens.length, recolhivel]);
+  const alternarRecolhido = () => setRecolhido(r => {
+    const n = !r;
+    try { localStorage.setItem("pt_atencao_aberta", n ? "0" : "1"); } catch (e) { /* sem armazenamento: só não lembra */ }
+    return n;
+  });
+  const fechado = recolhivel && recolhido;
   if (itens.length === 0) {
     // Cards with an emptyText stay on screen with a calm message; the others simply disappear.
     if (!emptyText) return null;
@@ -1795,14 +1920,25 @@ function AttentionCard({ itens, onNavigate, onConcluirDemanda, title = "Precisa 
   const escondidos = itens.length - limit;
   return (
     <div className="in" style={{ background: C.card, boxShadow: shadowSm, borderRadius: 18, padding: "16px 18px", marginBottom: flush ? 0 : 20 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+      <div onClick={recolhivel ? alternarRecolhido : undefined} role={recolhivel ? "button" : undefined} aria-expanded={recolhivel ? !recolhido : undefined}
+        style={{ display: semCabecalho ? "none" : "flex", alignItems: "center", gap: 8, marginBottom: fechado ? 0 : 12, cursor: recolhivel ? "pointer" : "default" }}>
         {neutro ? <Calendar size={16} color={C.lavender} /> : <AlertCircle size={16} color={C.coral} />}
         <span style={{ fontWeight: 700, fontSize: 13, color: C.ink, textTransform: "uppercase", letterSpacing: 0.4 }}>{title}</span>
         <span style={{ fontSize: 11, fontWeight: 700, color: neutro ? C.muted : C.coral, background: neutro ? C.border : C.coralSoft, borderRadius: 10, padding: "1px 8px" }}>
           {itens.length}
         </span>
+        {fechado && itens[0] && (
+          <span style={{ flex: 1, minWidth: 0, fontSize: 12, color: C.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {itens[0].label} · {itens[0].atrasado ? fmtAtraso(itens[0].diasAtraso) : fmtDate(itens[0].data)}
+          </span>
+        )}
+        {recolhivel && (
+          <span style={{ marginLeft: "auto", flexShrink: 0, width: 30, height: 30, borderRadius: 10, border: `1px solid ${C.border}`, color: C.inkSoft, display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <Plus size={16} style={{ transform: fechado ? "none" : "rotate(45deg)", transition: "transform .2s ease" }} />
+          </span>
+        )}
       </div>
-      <div style={{ display: "flex", flexDirection: "column" }}>
+      {!fechado && <div style={{ display: "flex", flexDirection: "column" }}>
         {visiveis.map((item, i) => (
           <div
             key={item.id}
@@ -1825,7 +1961,14 @@ function AttentionCard({ itens, onNavigate, onConcluirDemanda, title = "Precisa 
             </span>
             <span style={{ fontSize: 11.5, fontWeight: 700, color: item.atrasado ? C.coral : C.amber, flexShrink: 0 }}>
               {item.atrasado ? fmtAtraso(item.diasAtraso) : fmtDate(item.data)}
-            </span></>)}
+            </span>
+            {item.tab === "custos" && item.valor > 0 && <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11.5, color: C.muted, flexShrink: 0, minWidth: 78, textAlign: "right" }}>{fmtBRL(item.valor)}</span>}</>)}
+            {item.tab === "custos" && onPagar && (
+              <button type="button" title="Pagar" onClick={(e) => { e.stopPropagation(); onPagar(item.rawId); }}
+                style={{ flexShrink: 0, height: 26, borderRadius: 13, border: `1px solid ${C.emerald}`, background: C.emeraldSoft, color: C.emerald, cursor: "pointer", fontSize: 11.5, fontWeight: 700, padding: "0 10px" }}>
+                Pagar
+              </button>
+            )}
             {item.tab === "demandas" && onConcluirDemanda && (
               <button
                 type="button"
@@ -1846,8 +1989,8 @@ function AttentionCard({ itens, onNavigate, onConcluirDemanda, title = "Precisa 
             )}
           </div>
         ))}
-      </div>
-      {escondidos > 0 && (
+      </div>}
+      {!fechado && escondidos > 0 && (
         <button type="button" onClick={() => setAberto(a => !a)} style={{
           marginTop: 8, border: "none", background: "transparent", color: C.muted, cursor: "pointer",
           fontSize: 12, fontWeight: 700, padding: "4px 2px"
@@ -2271,7 +2414,7 @@ function ProximoVencLed({ info, onOpen, entrada = false }) {
           {item.descricao}{item.vencimento ? ` · ${fmtDate(item.vencimento)}` : ""}
         </div>
         <div style={{ fontSize: 11, color: C.faint, marginTop: 1 }}>
-          {nAbertos > 1 ? `${nAbertos} ${entrada ? "a receber" : "a pagar"} · ${fmtBRL(faltaPagar)} no total` : `Último ${entrada ? "a receber" : "a pagar"} neste mês`}
+          {nAbertos > 1 ? `${nAbertos} ${entrada ? "a receber" : "a pagar"} neste mês` : `Último ${entrada ? "a receber" : "a pagar"} neste mês`}
         </div>
       </div>
       <div style={{ textAlign: "right", flexShrink: 0 }}>
@@ -2317,9 +2460,201 @@ function PixMesCard({ pix, mesLabel, hidden }) {
   );
 }
 
-function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, onConcluirDemanda, inicioContagem, fixos = [] }) {
+// "ALUGUEL APTO 1" → "Aluguel Apto 1" (siglas curtas como "BC" ficam como estão).
+const tituloBonito = (v) => (typeof v === "string" && v === v.toUpperCase() && /[A-ZÀ-Ú]{3}/.test(v)) ? v.toLowerCase().replace(/(^|\s)\S/g, m => m.toUpperCase()) : v;
+
+function TooltipPT({ active, payload, label }) {
+  if (!active || !payload || payload.length === 0) return null;
+  const curto = (n) => String(n).replace("Conta Salário", "CS").replace("Conta Corrente", "CC");
+  return (
+    <div style={{ background: C.card, boxShadow: shadowMd, border: `1px solid ${C.border}`, borderRadius: 12, padding: "9px 12px", fontSize: 12.5, color: C.ink }}>
+      <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, marginBottom: 4 }}>{label}</div>
+      {payload.filter(p => p.value != null).map(p => (
+        <div key={p.dataKey} style={{ display: "flex", alignItems: "center", gap: 7, padding: "1px 0" }}>
+          <span style={{ width: 8, height: 8, borderRadius: 2, background: p.stroke || p.color || p.fill }} />
+          <span style={{ color: C.muted }}>{curto(p.name || p.dataKey)}</span>
+          <span style={{ marginLeft: "auto", paddingLeft: 12, fontFamily: "'IBM Plex Mono', monospace", fontWeight: 700 }}>{fmtBRL(p.value)}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Números-chave no topo de cada aba das Análises.
+function TilesAnalise({ itens, hidden }) {
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10, marginBottom: 14 }}>
+      {itens.map(t => (
+        <div key={t.rotulo} style={{ background: C.card, boxShadow: shadowSm, borderRadius: 16, padding: "14px 16px", minWidth: 0 }}>
+          <div style={{ fontSize: 10.5, fontWeight: 700, color: C.muted, textTransform: "uppercase", letterSpacing: 0.5 }}>{t.rotulo}</div>
+          <div style={{ fontFamily: "'Fraunces', serif", fontWeight: 700, fontSize: 22, letterSpacing: -0.4, color: t.cor || C.ink, marginTop: 6, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>{hidden && t.mask ? "•••" : tituloBonito(t.valor)}</div>
+          {t.sub && <div style={{ fontSize: 11, color: C.faint, marginTop: 3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{hidden && t.mask ? "•••" : t.sub}</div>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Cartão de abertura das abas (Custos, Receitas, Anual, Tarefas): título, número principal, ação e navegação de mês.
+function TabHero({ titulo, mesLabel, onLabelClick, destaque, pct = null, pctLabel = null, chips = null, rodapeExtra = null, rodapeTexto = null, rodapeCor = "#B8C2E8", acao, onPrev, onNext, prevOff = false, nextOff = false }) {
+  const navBtn = (off) => ({ width: 34, height: 34, borderRadius: 11, border: "1px solid rgba(255,255,255,0.14)", background: "rgba(255,255,255,0.06)", color: off ? "#5C6485" : "#D5DBF5", cursor: off ? "default" : "pointer", fontSize: 18, lineHeight: 1, display: "flex", alignItems: "center", justifyContent: "center" });
+  const chipSt = (cor, clicavel) => ({ fontSize: 12, fontWeight: 700, padding: "4px 11px", borderRadius: 999, background: "rgba(255,255,255,0.07)", border: "1px solid rgba(255,255,255,0.12)", color: cor || "#D5DBF5", cursor: clicavel ? "pointer" : "default", fontFamily: "inherit" });
+  return (
+    <div className="in" style={{
+      position: "relative", display: "flex", flexDirection: "column", minHeight: 290, borderRadius: 24, padding: "20px 22px", marginBottom: 20, border: "3px solid transparent",
+      background: "linear-gradient(150deg, #0B0F1F 0%, #101632 60%, #0F3D33 100%) padding-box, linear-gradient(135deg, #00E0A8, #9AA5D1) border-box",
+      boxShadow: "0 14px 34px rgba(11,15,31,0.28), 0 4px 12px rgba(11,15,31,0.18)"
+    }}>
+      <div style={{ position: "absolute", inset: 0, overflow: "hidden", borderRadius: "inherit", pointerEvents: "none" }}>
+        <div style={{ position: "absolute", top: -70, right: -60, width: 200, height: 200, borderRadius: "50%", background: `radial-gradient(circle, ${C.emeraldGlow} 0%, transparent 70%)` }} />
+      </div>
+      <div style={{ position: "relative", display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 12.5, color: "#B8C2E8", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.6 }}>{titulo}</div>
+          {destaque && (
+            <>
+              <div style={{ fontSize: 11.5, color: "#8B93B5", fontWeight: 600, marginTop: 12 }}>{destaque.rotulo}</div>
+              <div style={{ fontFamily: "'Fraunces', serif", fontWeight: 700, fontSize: "clamp(30px, 8vw, 40px)", letterSpacing: -1, lineHeight: 1.05, color: destaque.cor || "#F3F5FA", fontVariantNumeric: "tabular-nums", marginTop: 2 }}>{destaque.valor}</div>
+              {destaque.sub && <div style={{ fontSize: 12, color: "#8B93B5", marginTop: 6 }}>{destaque.sub}</div>}
+            </>
+          )}
+        </div>
+        {acao && (
+          <button className="tap" onClick={acao.onClick} style={{ flexShrink: 0, height: 38, borderRadius: 12, border: "none", background: "#00E0A8", color: "#04201A", fontWeight: 700, fontSize: 13, padding: "0 14px", display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+            <Plus size={16} strokeWidth={2.6} /> {acao.label}
+          </button>
+        )}
+      </div>
+      {chips && chips.length > 0 && (
+        <div style={{ position: "relative", display: "flex", flexWrap: "wrap", gap: 8, marginTop: 14 }}>
+          {chips.map((c, i) => c.onClick
+            ? <button key={i} type="button" className="tap" onClick={c.onClick} style={chipSt(c.cor, true)}>{c.t}</button>
+            : <span key={i} style={chipSt(c.cor, false)}>{c.t}</span>)}
+        </div>
+      )}
+      {pct !== null && (
+        <div style={{ position: "relative", marginTop: 16 }}>
+          <div style={{ height: 6, borderRadius: 3, background: "rgba(255,255,255,0.1)", overflow: "hidden" }}>
+            <div style={{ width: `${Math.max(0, Math.min(100, pct))}%`, height: "100%", borderRadius: 3, background: "linear-gradient(90deg, #00E0A8, #22D3EE)" }} />
+          </div>
+          {pctLabel && <div style={{ fontSize: 11, color: "#8B93B5", fontWeight: 600, marginTop: 6, textAlign: "right" }}>{pctLabel}</div>}
+        </div>
+      )}
+      {(onPrev || rodapeTexto || rodapeExtra) && (
+        <div style={{ position: "relative", marginTop: "auto", paddingTop: 16, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
+          {onPrev ? (
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <button type="button" onClick={prevOff ? undefined : onPrev} style={navBtn(prevOff)} aria-label="Anterior">‹</button>
+              {onLabelClick
+                ? <button type="button" className="tap" onClick={onLabelClick} aria-label="Escolher mês" style={{ border: "none", background: "transparent", cursor: "pointer", fontFamily: "inherit", fontSize: 13.5, fontWeight: 700, color: "#F3F5FA", minWidth: 118, display: "flex", alignItems: "center", justifyContent: "center", gap: 5 }}>{mesLabel}<ChevronDown size={14} color="#8B93B5" /></button>
+                : <span style={{ fontSize: 13.5, fontWeight: 700, color: "#F3F5FA", minWidth: 118, textAlign: "center" }}>{mesLabel}</span>}
+              <button type="button" onClick={nextOff ? undefined : onNext} style={navBtn(nextOff)} aria-label="Próximo">›</button>
+            </div>
+          ) : (
+            <div style={{ fontSize: 12.5, color: rodapeCor, fontWeight: 600, minWidth: 0, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{rodapeTexto}</div>
+          )}
+          {rodapeExtra}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function BarraEmpilhada({ dados, corDe, hidden, nota, totalLabel = "Total" }) {
+  const total = dados.reduce((t, d) => t + d.value, 0) || 1;
+  return (
+    <div>
+      <div style={{ display: "flex", height: 16, borderRadius: 8, overflow: "hidden", gap: 2, marginBottom: 14 }}>
+        {dados.map(d => (
+          <div key={d.name} title={d.name} style={{ width: `${(d.value / total) * 100}%`, minWidth: 3, background: corDe(d.name), position: "relative", overflow: "hidden" }}>
+            {d.pend > 0 && d.value > 0 && <div style={{ position: "absolute", right: 0, top: 0, bottom: 0, width: `${Math.min(100, (d.pend / d.value) * 100)}%`, background: "repeating-linear-gradient(135deg, rgba(10,14,28,0.55) 0 4px, transparent 4px 8px)" }} />}
+          </div>
+        ))}
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8 }}>
+        <span style={{ fontSize: 11, fontWeight: 700, color: C.faint, textTransform: "uppercase", letterSpacing: 0.5 }}>{totalLabel}</span>
+        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 14, fontWeight: 700, color: C.ink }}>{hidden ? "•••" : fmtBRL(total)}</span>
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {dados.map(d => (
+          <div key={d.name} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5 }}>
+            <span style={{ width: 9, height: 9, borderRadius: 3, background: corDe(d.name), flexShrink: 0 }} />
+            <span style={{ color: C.ink, flex: 1, minWidth: 0, lineHeight: 1.25, overflow: "hidden", textOverflow: "ellipsis" }}>{tituloBonito(d.name)}</span>
+            <span style={{ fontSize: 10.5, color: C.faint, minWidth: 28, textAlign: "right" }}>{pctDe(d.value, dados)}</span>
+            <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: C.muted, fontSize: 12 }}>{hidden ? "•••" : fmtBRL(d.value)}</span>
+          </div>
+        ))}
+      </div>
+      {dados.some(d => d.pend > 0) && <div style={{ fontSize: 10.5, color: C.faint, marginTop: 8 }}>Listrado = ainda a pagar</div>}
+      {nota && <div style={{ fontSize: 10.5, color: C.faint, marginTop: 8 }}>{nota}</div>}
+    </div>
+  );
+}
+
+function ProximosDiasCard({ itens, onOpenItem, onAcao, hidden, central = false }) {
+  const [aberto, setAberto] = useState(false);
+  const limite = central ? 999 : 3;
+  const vis = aberto ? itens : itens.slice(0, limite);
+  const cor = (t) => t === "Fixo" ? C.amber : t === "Tarefa" ? C.emerald : C.lavender;
+  const grupoDe = (it) => { const d = diasAteVenc(it.data); return d < 0 ? (central ? "Atrasados" : "Já venceu") : d === 0 ? "Hoje" : d === 1 ? "Amanhã" : d <= 7 ? "Esta semana" : (central ? "Semana seguinte" : "Depois"); };
+  return (
+    <div className={central ? undefined : "in"} style={central ? { padding: 0 } : { background: C.card, boxShadow: shadowSm, borderRadius: 18, padding: "16px 18px", marginBottom: 20 }}>
+      {!central && <div className={itens.length > limite ? "tap" : undefined} onClick={itens.length > limite ? () => setAberto(a => !a) : undefined} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: itens.length ? 10 : 6, cursor: itens.length > limite ? "pointer" : "default" }}>
+        <Calendar size={16} color={C.lavender} />
+        <span style={{ fontWeight: 700, fontSize: 13, color: C.ink, textTransform: "uppercase", letterSpacing: 0.4 }}>Próximos dias</span>
+        {itens.length > 0 && <span style={{ fontSize: 11, fontWeight: 700, color: C.muted, background: C.border, borderRadius: 10, padding: "1px 8px" }}>{itens.length}</span>}
+        {itens.length > limite && <ChevronDown size={18} color={C.muted} style={{ marginLeft: "auto", transform: aberto ? "rotate(180deg)" : "none", transition: "transform .2s ease" }} />}
+      </div>}
+      {itens.length === 0 ? (
+        <div style={{ fontSize: 12.5, color: C.muted }}>{central ? "Nada atrasado nem agendado pelos próximos 14 dias. Tudo em dia ✓" : "Nada a lançar nem agendado pelos próximos dias."}</div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column" }}>
+          {vis.map((it, i) => (
+            <React.Fragment key={it.id}>
+            {(i === 0 || grupoDe(vis[i - 1]) !== grupoDe(it)) && (
+              <div style={{ fontSize: 10.5, fontWeight: 700, color: grupoDe(it) === "Atrasados" ? C.coral : C.faint, textTransform: "uppercase", letterSpacing: 0.6, padding: i === 0 ? "0 0 4px" : "12px 0 4px" }}>{grupoDe(it)}</div>
+            )}
+            <div className="tap" onClick={() => onOpenItem && onOpenItem(it)}
+              style={{ display: "flex", alignItems: "center", gap: 12, padding: "9px 0", cursor: "pointer", borderBottom: i < vis.length - 1 ? `1px solid ${C.border}` : "none" }}>
+              <div style={{ width: 46, flexShrink: 0, textAlign: "center", borderRadius: 10, background: C.border, padding: "5px 0" }}>
+                <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 15, fontWeight: 700, color: C.ink, lineHeight: 1.1 }}>{String(it.data).slice(8, 10)}</div>
+                <div style={{ fontSize: 9.5, fontWeight: 700, color: C.muted, textTransform: "uppercase", letterSpacing: 0.4 }}>{MESES_ABR[Number(String(it.data).slice(5, 7)) - 1]}</div>
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: C.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.label}</div>
+                <div style={{ fontSize: 11.5, color: it.atrasado ? C.coral : C.faint, marginTop: 2 }}>
+                  <span style={{ color: cor(it.tipo), fontWeight: 700 }}>{it.tipo}</span> · {it.sub}
+                </div>
+              </div>
+              {it.valor ? <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: C.muted, flexShrink: 0 }}>{hidden ? "•••" : fmtBRL(it.valor)}</span> : null}
+              {onAcao && (
+                <button type="button" onClick={(e) => { e.stopPropagation(); onAcao(it); }}
+                  style={{ flexShrink: 0, height: 28, borderRadius: 14, border: `1px solid ${C.emerald}`, background: C.emeraldSoft, color: C.emerald, cursor: "pointer", fontSize: 11.5, fontWeight: 700, padding: "0 11px" }}>
+                  {it.tipo === "Fixo" ? "Lançar" : it.tipo === "Custo" ? "Pagar" : "Concluir"}
+                </button>
+              )}
+            </div>
+            </React.Fragment>
+          ))}
+        </div>
+      )}
+      {itens.length > limite && (
+        <button type="button" onClick={() => setAberto(a => !a)} style={{ marginTop: 8, border: "none", background: "transparent", color: C.muted, cursor: "pointer", fontSize: 12, fontWeight: 700, padding: "4px 2px" }}>
+          {aberto ? "Ver menos" : `+${itens.length - limite} mais`}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, onConcluirDemanda, inicioContagem, fixos = [], topo = null, pedirAtencao = false, onConsumePedido, central = { itens: [], nUrgentes: 0 } }) {
   const [hidden, setHidden] = useState(false);
   const [saldoAberto, setSaldoAberto] = useState(false);
+  const [analise, setAnalise] = useState("evolucao");
+  const [atencaoAberta, setAtencaoAberta] = useState(false);
+  useEffect(() => { if (pedirAtencao) { setAtencaoAberta(true); onConsumePedido && onConsumePedido(); } }, [pedirAtencao]);
+  const [pulsarAtencao, setPulsarAtencao] = useState(false);
+  const qtdAtencaoAnt = useRef(null);
   // Mês exibido nos cartões do Início (padrão: o mês corrente). "Precisa de atenção" e "Agenda" continuam sendo de hoje.
   // null = acompanha o mês corrente (se o app ficar aberto na virada do mês, ele muda sozinho).
   const [mesEscolhido, setMesEscolhido] = useState(null);
@@ -2343,6 +2678,10 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
   const atencao = useMemo(() => proximos30Todos.filter(i => i.atrasado), [proximos30Todos]);
   const proximos30 = useMemo(() => proximos30Todos.filter(i => !i.atrasado), [proximos30Todos]);
   const ritmo = useRitmoMes(custos, mesAtual);
+  useEffect(() => {
+    if (qtdAtencaoAnt.current !== null && central.nUrgentes > qtdAtencaoAnt.current) { setPulsarAtencao(true); const t = setTimeout(() => setPulsarAtencao(false), 1600); qtdAtencaoAnt.current = central.nUrgentes; return () => clearTimeout(t); }
+    qtdAtencaoAnt.current = central.nUrgentes;
+  }, [central.nUrgentes]);
 
   const receitasComparativo = useMemo(() => {
     // Grouped by título (like the donut next to it): two "BC" records become one "BC" bar.
@@ -2436,9 +2775,11 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
     custos.filter(c => c.mes === mesAtual).forEach(c => {
       const v = Number(c.valorPago ?? c.valorPrevisto ?? 0);
       const k = contaDaFonte(c.fonte);
-      map[k] = (map[k] || 0) + v;
+      const m = map[k] || (map[k] = { value: 0, pend: 0 });
+      m.value += v;
+      if (c.valorPago == null) m.pend += v;
     });
-    return Object.entries(map).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
+    return Object.entries(map).map(([name, m]) => ({ name, value: m.value, pend: m.pend })).sort((a, b) => b.value - a.value);
   }, [custos, mesAtual]);
   const meiosMes = useMemo(() => notasMeios(custos.filter(c => c.mes === mesAtual)), [custos, mesAtual]);
 
@@ -2464,9 +2805,11 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
       const mesKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
       const pago = custos.filter(c => c.mes === mesKey).reduce((s, c) => s + Number(c.valorPago || 0), 0);
       const recebido = receitas.filter(r => r.mes === mesKey).reduce((s, r) => s + Number(r.valorRecebido || 0), 0);
-      out.push({ mes: MESES_ABR[d.getMonth()], Pago: pago, Recebido: recebido, fora: !!inicioContagem && mesKey < inicioContagem });
+      out.push({ mes: MESES_ABR[d.getMonth()], mesKey, sel: mesKey === mesAtual, Pago: pago, Recebido: recebido, fora: !!inicioContagem && mesKey < inicioContagem });
     }
-    return out;
+    // Meses anteriores ao início da contagem não entram quando já há 3 ou mais meses válidos (sem faixas vazias).
+    const dentro = out.filter(d => !d.fora);
+    return dentro.length >= 3 ? dentro : out;
   }, [custos, receitas, inicioContagem, ano, mesNumVisto]);
 
   // Ranked by descrição, not by record: a cost split across fontes (one record
@@ -2495,8 +2838,32 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
     const aReceber = rs.filter(r => r.status !== "Recebido").reduce((t, r) => t + Math.max(0, Number(r.valorPrevisto || 0) - Number(r.valorRecebido || 0)), 0);
     return { pago, aPagar, recebido, aReceber, saldoProjetado: (recebido + aReceber) - (pago + aPagar) };
   }, [custos, receitas, mesAtual]);
-  const projMax = Math.max(1, projecao.recebido + projecao.aReceber, projecao.pago + projecao.aPagar);
-  const projQuitado = projecao.aPagar === 0 && projecao.aReceber === 0 && (projecao.pago + projecao.recebido) > 0;
+  // Fixos ainda não lançados neste mês entram na projeção como ESTIMATIVA (usa o valor pago esperado, se houver).
+  // Fixos sem valor (ex.: Unimed, Gibson) ficam de fora e são avisados.
+  const fixosFaltam = useMemo(() => ehMesCorrente ? fixosPendentes(fixos, custos, mesAtual).faltam : [], [fixos, custos, mesAtual, ehMesCorrente]);
+  const valorFixo = (f) => Number(f.valorPago || f.valor || 0);
+  const fixosEst = fixosFaltam.reduce((t, f) => t + valorFixo(f), 0);
+  const fixosSemValor = fixosFaltam.filter(f => !(valorFixo(f) > 0));
+  const saldoEstimado = projecao.saldoProjetado - fixosEst;
+  const projMax = Math.max(1, projecao.recebido + projecao.aReceber, projecao.pago + projecao.aPagar + fixosEst);
+  const projQuitado = projecao.aPagar === 0 && fixosEst === 0 && projecao.aReceber === 0 && (projecao.pago + projecao.recebido) > 0;
+
+  // "Próximos dias": fixos a lançar + custos e tarefas que vêm pela frente, tudo em ordem de data.
+  const proximosDias = useMemo(() => {
+    const lista = proximos30.map(i => ({
+      id: i.id, tipo: i.tab === "demandas" ? "Tarefa" : "Custo", label: i.label, data: i.data,
+      sub: rotuloAgenda(i), tab: i.tab, rawId: i.rawId
+    }));
+    fixosFaltam.forEach(f => {
+      const data = vencimentoDoFixo(f, mesAtual);
+      const d = diasAteVenc(data);
+      lista.push({
+        id: `f-${f.id || f.descricao}`, tipo: "Fixo", label: f.descricao, data, fixo: true, valor: valorFixo(f) > 0 ? valorFixo(f) : null,
+        sub: d < 0 ? `a lançar · venceu dia ${data.slice(8, 10)}` : d === 0 ? "a lançar · vence hoje" : d === 1 ? "a lançar · vence amanhã" : `a lançar · vence em ${d} dias`
+      });
+    });
+    return lista.sort((a, b) => String(a.data).localeCompare(String(b.data)) || String(a.label).localeCompare(String(b.label)));
+  }, [proximos30, fixosFaltam, mesAtual]);
 
   const comparativo = useMemo(() => {
     const soma = (mes, fonte) => custos.filter(c => c.mes === mes && contaDaFonte(c.fonte) === fonte).reduce((t, c) => t + Number(c.valorPago ?? c.valorPrevisto ?? 0), 0);
@@ -2523,14 +2890,84 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
   const acumAtual = [...acumulado].reverse().find(d => d.Acumulado !== null)?.Acumulado ?? 0;
   const acumColor = acumAtual < 0 ? C.coral : C.emerald;
 
+  // Curva do saldo dia a dia (recebido − pago até cada dia): este mês contra o mês anterior.
+  const curva = useMemo(() => {
+    const nA = daysInMonthOf(mesAtual), nB = daysInMonthOf(mesAnterior);
+    const hojeDia = ehMesCorrente ? Math.min(new Date().getDate(), nA) : nA;
+    const rows = [];
+    for (let d = 1; d <= Math.max(nA, nB); d++) {
+      rows.push({
+        dia: d,
+        atual: d <= hojeDia ? recebidoAteDia(receitas, mesAtual, d) - pagoAteDia(custos, mesAtual, d) : null,
+        anterior: d <= nB ? recebidoAteDia(receitas, mesAnterior, d) - pagoAteDia(custos, mesAnterior, d) : null
+      });
+    }
+    return { rows, hojeDia };
+  }, [custos, receitas, mesAtual, mesAnterior, ehMesCorrente]);
+
+  // Movimento acumulado por conta (entradas − saídas pagas, mês a mês desde "contar a partir de").
+  // É movimento, não saldo bancário: não há saldo inicial cadastrado.
+  const movConta = useMemo(() => {
+    const cum = { "Conta Salário": 0, "Conta Corrente": 0, "Dinheiro": 0 };
+    const usadas = new Set();
+    const rows = [];
+    for (let i = inicioIdx; i < mesNumVisto; i++) {
+      const mk = `${ano}-${String(i + 1).padStart(2, "0")}`;
+      custos.filter(c => c.mes === mk && c.status === "Pago").forEach(c => { const k = contaDaFonte(c.fonte); if (k in cum) { cum[k] -= Number(c.valorPago || 0); usadas.add(k); } });
+      receitas.filter(r => r.mes === mk).forEach(r => { const k = contaDaFonte(r.contaDestino); if (k in cum) { cum[k] += Number(r.valorRecebido || 0); usadas.add(k); } });
+      depositos.filter(r => r.mes === mk && r.status === "Recebido").forEach(r => {
+        const v = Number(r.valorRecebido || 0); const k = contaDaFonte(r.contaDestino);
+        if (k in cum) { cum[k] += v; usadas.add(k); }
+        cum["Dinheiro"] -= v; usadas.add("Dinheiro");
+      });
+      rows.push({ mes: MESES_ABR[i], ...cum });
+    }
+    return { rows, contas: ["Conta Salário", "Conta Corrente", "Dinheiro"].filter(k => usadas.has(k)) };
+  }, [custos, receitas, depositos, inicioIdx, mesNumVisto, ano]);
+
   const mesLabel = monthLabel(mesAtual);
+
+  // Números-chave de cada aba das Análises.
+  const tilesAnalise = (() => {
+    if (analise === "evolucao") {
+      let melhor = null;
+      for (let i = inicioIdx; i < mesNumVisto; i++) if (melhor === null || saldosPorMes[i] > saldosPorMes[melhor]) melhor = i;
+      return [
+        { rotulo: "Saldo acumulado", valor: fmtBRL(acumAtual), sub: `desde ${MESES[inicioIdx].toLowerCase()}`, cor: acumAtual < 0 ? C.coral : C.emerald, mask: true },
+        { rotulo: "Média paga por mês", valor: ritmo.disponivel ? fmtBRL(ritmo.mediaMensal) : "—", sub: ritmo.disponivel ? `últimos ${ritmo.nMeses} meses` : "sem histórico", mask: true },
+        ...(melhor !== null ? [{ rotulo: "Melhor mês", valor: MESES[melhor], sub: `saldo ${fmtBRL(saldosPorMes[melhor])}`, mask: true }] : [])
+      ];
+    }
+    if (analise === "custos") {
+      const top = topCustos[0];
+      return [
+        { rotulo: "Falta pagar", valor: fmtBRL(projecao.aPagar), sub: projecao.aPagar > 0 ? "ainda previsto" : "tudo pago", cor: projecao.aPagar > 0 ? C.amber : C.emerald, mask: true },
+        ...(top ? [{ rotulo: "Maior custo", valor: top.descricao, sub: `${fmtBRL(top.valor)}${kpis.totalPago > 0 ? ` · ${((top.valor / kpis.totalPago) * 100).toFixed(0)}% do pago` : ""}`, mask: true }] : []),
+        ...(porFonte[0] ? [{ rotulo: "Fonte principal", valor: porFonte[0].name, sub: `${pctDe(porFonte[0].value, porFonte)} dos custos` }] : [])
+      ];
+    }
+    const prevTotal = projecao.recebido + projecao.aReceber;
+    return [
+      { rotulo: "Previsto no mês", valor: fmtBRL(prevTotal), sub: `${fmtBRL(kpis.totalRecebido)} já recebidos`, mask: true },
+      { rotulo: "Falta entrar", valor: fmtBRL(projecao.aReceber), sub: projecao.aReceber > 0 ? "ainda previsto" : "tudo recebido", mask: true },
+      ...(porCategoria[0] ? [{ rotulo: "Maior receita", valor: porCategoria[0].name, sub: `${fmtBRL(porCategoria[0].value)} · ${pctDe(porCategoria[0].value, porCategoria)}`, mask: true }] : [])
+    ];
+  })();
 
   return (
     <div>
-      <AttentionCard itens={atencao} onNavigate={onNavigate} onConcluirDemanda={onConcluirDemanda}
-        emptyText="Nada atrasado. Tudo em dia." okWhenEmpty />
-
-      <FixosAVencerCard itens={fixosAVencer} onOpen={() => onNavigate && onNavigate("custos", null, { abrirFixos: true })} />
+      {atencaoAberta && (
+        <Modal title="Central de avisos" onClose={() => setAtencaoAberta(false)}>
+          <div style={{ fontSize: 11.5, color: C.faint, marginBottom: 10 }}>Atrasados e tudo o que vence nos próximos 14 dias.</div>
+          <ProximosDiasCard central itens={central.itens} hidden={hidden}
+            onAcao={async (it) => {
+              if (it.tipo === "Fixo") { setAtencaoAberta(false); onNavigate && onNavigate("custos", null, { lancarFixo: it.label, mes: currentMonth() }); }
+              else if (it.tipo === "Custo") { setAtencaoAberta(false); onNavigate && onNavigate("custos", it.rawId, { pagar: true }); }
+              else if (onConcluirDemanda && await confirmar(`Marcar "${it.label}" como Concluída?`, { okLabel: "Concluir" })) onConcluirDemanda(it.rawId);
+            }}
+            onOpenItem={(it) => { setAtencaoAberta(false); it.fixo ? (onNavigate && onNavigate("custos", null, { abrirFixos: true })) : (onNavigate && onNavigate(it.tab, it.rawId)); }} />
+        </Modal>
+      )}
 
       <BalanceHero
         pix={pixMes}
@@ -2549,7 +2986,16 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
         semLancamentos={semLancamentos}
         mesAnteriorLabel={monthLabel(mesAnterior)}
         onVerAnterior={() => escolherMes(mesAnterior)}
+        topo={topo}
+        curva={curva}
+        atencao={{ n: central.nUrgentes, onOpen: () => setAtencaoAberta(true), pulsar: pulsarAtencao }}
+        situacao={!ehMesCorrente ? [] : [
+          ...(ritmo.disponivel ? [{ t: `Ritmo ${ritmo.pct.toFixed(0)}% do normal`, cor: ritmo.pct > 150 ? "#FF8A76" : ritmo.pct > 100 ? "#FFC53D" : "#4FE8BE" }] : []),
+          ...(fixosEst > 0 ? [{ t: `Faltam ${fmtBRL(fixosEst)} em fixos ›`, cor: "#B8BFDB", onClick: () => onNavigate && onNavigate("custos", null, { abrirFixos: true }) }] : []),
+          ...(projQuitado ? [] : [{ t: `Fecha em ${fmtBRL(saldoEstimado)} (estimativa)`, cor: saldoEstimado < 0 ? "#FF8A76" : "#4FE8BE" }])
+        ]}
         porFonte={saldoPorFonte}
+        contasLinha={saldoPorFonte.filter(f => f.fonte !== "—").slice().sort((a, b) => FONTES.indexOf(a.fonte) - FONTES.indexOf(b.fonte))}
         expanded={saldoAberto}
         onToggleExpanded={() => setSaldoAberto(a => !a)}
       />
@@ -2567,27 +3013,41 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
         },
       ]} />
 
+      {ehMesCorrente && <ProximosDiasCard itens={proximosDias} hidden={hidden}
+        onAcao={async (it) => {
+          if (it.tipo === "Fixo") onNavigate && onNavigate("custos", null, { lancarFixo: it.label, mes: mesAtual });
+          else if (it.tipo === "Custo") onNavigate && onNavigate("custos", it.rawId, { pagar: true });
+          else if (onConcluirDemanda && await confirmar(`Marcar "${it.label}" como Concluída?`, { okLabel: "Concluir" })) onConcluirDemanda(it.rawId);
+        }}
+        onOpenItem={(it) => it.fixo ? (onNavigate && onNavigate("custos", null, { abrirFixos: true })) : (onNavigate && onNavigate(it.tab, it.rawId))} />}
+
       <div className="in" style={{ background: C.card, boxShadow: shadowSm, borderRadius: 18, padding: "20px 22px", marginBottom: 20 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12, marginBottom: 16 }}>
           <div>
             <div style={{ fontWeight: 700, fontSize: 13.5, color: C.ink }}>Projeção de fechamento — {mesLabel}</div>
-            <div style={{ fontSize: 11.5, color: C.faint, marginTop: 3 }}>{projQuitado ? "Tudo o que foi lançado já foi pago e recebido" : "Se tudo o que está previsto for pago e recebido"}</div>
+            <div style={{ fontSize: 11.5, color: C.faint, marginTop: 3 }}>{projQuitado ? "Tudo o que foi lançado já foi pago e recebido" : fixosEst > 0 ? "Estimativa: o previsto mais os fixos ainda não lançados" : "Se tudo o que está previsto for pago e recebido"}</div>
           </div>
           <div style={{ textAlign: "right" }}>
-            <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 24, fontWeight: 700, color: projecao.saldoProjetado < 0 ? C.coral : C.emerald }}>
-              {hidden ? "R$ •••••" : fmtBRL(projecao.saldoProjetado)}
+            <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 24, fontWeight: 700, color: saldoEstimado < 0 ? C.coral : C.emerald }}>
+              {hidden ? "R$ •••••" : fmtBRL(saldoEstimado)}
             </div>
-            <div style={{ fontSize: 11, color: C.faint }}>{projQuitado ? "saldo do mês" : "saldo previsto no fim do mês"}</div>
+            <div style={{ fontSize: 11, color: C.faint }}>{projQuitado ? "saldo do mês" : fixosEst > 0 ? "saldo estimado no fim do mês" : "saldo previsto no fim do mês"}</div>
           </div>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <ProjBar label="Entradas" done={projecao.recebido} pending={projecao.aReceber} color={C.emerald} max={projMax} hidden={hidden} />
-          <ProjBar label="Saídas" done={projecao.pago} pending={projecao.aPagar} color={C.coral} max={projMax} hidden={hidden} />
+          <ProjBar label="Saídas" done={projecao.pago} pending={projecao.aPagar + fixosEst} color={C.coral} max={projMax} hidden={hidden} />
         </div>
         {!projQuitado && <div style={{ display: "flex", gap: 16, marginTop: 12, fontSize: 11, color: C.faint, flexWrap: "wrap" }}>
           <span style={{ display: "flex", alignItems: "center", gap: 6 }}><span style={{ width: 10, height: 10, borderRadius: 3, background: C.muted }} />já realizado</span>
           <span style={{ display: "flex", alignItems: "center", gap: 6 }}><span style={{ width: 10, height: 10, borderRadius: 3, background: `repeating-linear-gradient(135deg, ${C.muted}88 0 3px, ${C.muted}33 3px 6px)` }} />ainda previsto</span>
         </div>}
+        {fixosEst > 0 && (
+          <div style={{ fontSize: 11.5, color: C.faint, marginTop: 10, lineHeight: 1.45 }}>
+            Inclui {hidden ? "•••" : fmtBRL(fixosEst)} de {fixosFaltam.length - fixosSemValor.length} {fixosFaltam.length - fixosSemValor.length === 1 ? "fixo ainda não lançado" : "fixos ainda não lançados"} (estimativa).
+            {fixosSemValor.length > 0 && <> {fixosSemValor.map(f => f.descricao).join(" e ")} {fixosSemValor.length === 1 ? "não tem" : "não têm"} valor cadastrado e {fixosSemValor.length === 1 ? "fica" : "ficam"} de fora.</>}
+          </div>
+        )}
         <div style={{ marginTop: 18 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
             <span style={{ fontWeight: 700, fontSize: 12.5, color: C.ink }}>Ritmo do mês</span>
@@ -2602,11 +3062,11 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
               <div style={{ fontSize: 11, color: C.faint, marginBottom: 8 }}>
                 Comparado ao que você normalmente já tinha pago até o dia {ritmo.diaRef}, nos últimos {ritmo.nMeses === 1 ? "mês" : `${ritmo.nMeses} meses`} — não à média do mês inteiro
               </div>
-              <ProgressBar
-                pct={ritmo.pct}
-                color="linear-gradient(90deg, #00E0A8, #22D3EE)"
-                overColor={ritmo.pct > 150 ? "linear-gradient(90deg,#FFB929,#FF5A68)" : "linear-gradient(90deg,#FFC53D,#FFB929)"}
-              />
+              <div style={{ position: "relative", height: 10, borderRadius: 5, background: C.border, margin: "6px 0 18px" }}>
+                <div style={{ height: "100%", width: `${Math.min(ritmo.pct, 200) / 2}%`, borderRadius: 5, background: ritmo.pct > 150 ? "linear-gradient(90deg,#FFB929,#FF5A68)" : ritmo.pct > 100 ? "linear-gradient(90deg,#FFC53D,#FFB929)" : "linear-gradient(90deg,#00E0A8,#22D3EE)" }} />
+                <div style={{ position: "absolute", left: "50%", top: -4, bottom: -4, width: 2, borderRadius: 1, background: C.ink, opacity: 0.55 }} />
+                <span style={{ position: "absolute", left: "50%", top: 14, transform: "translateX(-50%)", fontSize: 10, color: C.faint }}>normal</span>
+              </div>
               <div style={{ fontSize: 11, color: C.faint, marginTop: 8 }}>
                 {ehMesCorrente ? "Pago até agora" : "Pago no mês"}: <strong style={{ color: C.ink }}>{hidden ? "•••" : fmtBRL(ritmo.pagoAteAgora)}</strong>
                 {" · "}Normal até o dia {ritmo.diaRef}: <strong style={{ color: C.ink }}>{hidden ? "•••" : fmtBRL(ritmo.mediaAteODia)}</strong>
@@ -2621,75 +3081,37 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
         </div>
       </div>
 
-      <div className="grid2" style={{ marginBottom: 20 }}>
+      <div role="tablist" aria-label="Análises" style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginBottom: 14 }}>
+        <span style={{ fontWeight: 700, fontSize: 13, color: C.ink, textTransform: "uppercase", letterSpacing: 0.4, marginRight: 6 }}>Análises</span>
+        {[["evolucao", "Evolução"], ["custos", "Custos"], ["receitas", "Receitas"]].map(([k, t]) => (
+          <button key={k} type="button" role="tab" aria-selected={analise === k} onClick={() => setAnalise(k)}
+            style={{ border: `1px solid ${analise === k ? C.emerald : C.border}`, background: analise === k ? C.emeraldSoft : "transparent", color: analise === k ? C.emerald : C.muted, borderRadius: 999, padding: "7px 14px", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>{t}</button>
+        ))}
+      </div>
+
+      <TilesAnalise itens={tilesAnalise} hidden={hidden} />
+
+      <div className="grid2" style={{ marginBottom: 20, alignItems: "start" }}>
         {/* Orçamento agora vive dentro do card de projeção */}
 
+                {analise === "custos" && porFonte.length > 1 && (
         <div className="in" style={{ background: C.card, boxShadow: shadowSm, borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "40ms" }}>
-          <div style={{ fontWeight: 700, fontSize: 13.5, color: C.ink, marginBottom: 10 }}>Custos por fonte — {mesLabel}</div>
-          {porFonte.length === 0 ? (
-            <div style={{ color: C.muted, fontSize: 13, padding: "16px 0", textAlign: "center" }}>Sem custos lançados neste mês.</div>
-          ) : (
-            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-              <div style={{ width: 118, height: 118, flexShrink: 0, position: "relative" }}>
-                <DonutTotal total={porFonte.reduce((t, f) => t + f.value, 0)} hidden={hidden} />
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie data={porFonte} dataKey="value" nameKey="name" innerRadius={37} outerRadius={55} paddingAngle={porFonte.length > 1 ? 2 : 0}>
-                      {porFonte.map((f) => <Cell key={f.name} fill={fonteColor(f.name)} />)}
-                    </Pie>
-                    <Tooltip content={<RichTooltip />} />
-                  </PieChart>
-                </ResponsiveContainer>
-              </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 6, flex: 1, minWidth: 120 }}>
-                {porFonte.map((f, i) => (
-                  <div key={f.name} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5 }}>
-                    <span style={{ width: 9, height: 9, borderRadius: 3, background: fonteColor(f.name), flexShrink: 0 }} />
-                    <span style={{ color: C.ink, flex: 1, whiteSpace: "nowrap" }}>{f.name}</span>
-                    <span style={{ fontSize: 10.5, color: C.faint, minWidth: 24, textAlign: "right" }}>{pctDe(f.value, porFonte)}</span>
-                    <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: C.muted, fontSize: 11.5 }}>{hidden ? "•••" : fmtBRL(f.value)}</span>
-                  </div>
-                ))}
-                {meiosMes.length > 0 && <div style={{ fontSize: 10.5, color: C.faint, marginTop: 2 }}>{meiosMes.join(" · ")}</div>}
-              </div>
-            </div>
-          )}
+          <div style={{ fontWeight: 700, fontSize: 13.5, color: C.ink, marginBottom: 12 }}>Custos por fonte — {mesLabel}</div>
+          <BarraEmpilhada dados={porFonte} corDe={fonteColor} hidden={hidden} nota={meiosMes.join(" · ")} totalLabel="Pago + a pagar" />
         </div>
+        )}
 
+                {analise === "receitas" && porCategoria.length > 1 && (
         <div className="in" style={{ background: C.card, boxShadow: shadowSm, borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "120ms" }}>
-          <div style={{ fontWeight: 700, fontSize: 13.5, color: C.ink, marginBottom: 10 }}>Receitas por título — {mesLabel}</div>
-          {porCategoria.length === 0 ? (
-            <div style={{ color: C.muted, fontSize: 13, padding: "16px 0", textAlign: "center" }}>Sem receitas lançadas neste mês.</div>
-          ) : (
-            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-              <div style={{ width: 118, height: 118, flexShrink: 0, position: "relative" }}>
-                <DonutTotal total={porCategoria.reduce((t, f) => t + f.value, 0)} hidden={hidden} />
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie data={porCategoria} dataKey="value" nameKey="name" innerRadius={37} outerRadius={55} paddingAngle={porCategoria.length > 1 ? 2 : 0}>
-                      {porCategoria.map((f) => <Cell key={f.name} fill={catColor(f.name)} />)}
-                    </Pie>
-                    <Tooltip content={<RichTooltip />} />
-                  </PieChart>
-                </ResponsiveContainer>
-              </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 6, flex: 1, minWidth: 120 }}>
-                {porCategoria.map((f, i) => (
-                  <div key={f.name} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5 }}>
-                    <span style={{ width: 9, height: 9, borderRadius: 3, background: catColor(f.name), flexShrink: 0 }} />
-                    <span title={f.name} style={{ color: C.ink, flex: 1, minWidth: 0, lineHeight: 1.25, display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical", overflow: "hidden", wordBreak: "break-word" }}>{f.name}</span>
-                    <span style={{ fontSize: 10.5, color: C.faint, minWidth: 28, textAlign: "right" }}>{pctDe(f.value, porCategoria)}</span>
-                    <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: C.muted, fontSize: 12 }}>{hidden ? "•••" : fmtBRL(f.value)}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+          <div style={{ fontWeight: 700, fontSize: 13.5, color: C.ink, marginBottom: 12 }}>Receitas por título — {mesLabel}</div>
+          <BarraEmpilhada dados={porCategoria} corDe={catColor} hidden={hidden} />
         </div>
+        )}
 
+        {analise === "evolucao" && (
         <div className="in" style={{ background: C.card, boxShadow: shadowSm, borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "160ms", display: "flex", flexDirection: "column" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
-            <span style={{ fontWeight: 700, fontSize: 13.5, color: C.ink }}>Pago x Recebido — últimos 6 meses</span>
+            <span style={{ fontWeight: 700, fontSize: 13.5, color: C.ink }}>Pago x Recebido <span style={{ fontWeight: 500, fontSize: 11.5, color: C.faint }}>· toque num mês para abri-lo</span></span>
             <span style={{ display: "flex", gap: 10, fontSize: 11, color: C.muted, fontWeight: 600 }}>
               <span style={{ display: "flex", alignItems: "center", gap: 4 }}><span style={{ width: 8, height: 8, borderRadius: 2, background: "#E8434F" }} />Pago</span>
               <span style={{ display: "flex", alignItems: "center", gap: 4 }}><span style={{ width: 8, height: 8, borderRadius: 2, background: "#00B98A" }} />Recebido</span>
@@ -2700,7 +3122,7 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
           )}
           <div style={{ width: "100%", flex: 1, minHeight: 170 }}>
             <ResponsiveContainer width="100%" height="100%" minHeight={170}>
-              <BarChart data={tendencia} barGap={4}>
+              <BarChart data={tendencia} barGap={4} barCategoryGap="24%" margin={{ top: 18 }}>
                 <defs>
                   <linearGradient id="gPago" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="0%" stopColor={C.gradOut[0]} /><stop offset="100%" stopColor={C.gradOut[1]} />
@@ -2709,47 +3131,52 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
                     <stop offset="0%" stopColor={C.gradIn[0]} /><stop offset="100%" stopColor={C.gradIn[1]} />
                   </linearGradient>
                 </defs>
+                <CartesianGrid vertical={false} stroke={C.border} strokeDasharray="3 4" />
                 <XAxis dataKey="mes" tick={{ fontSize: 11, fill: C.faint }} axisLine={{ stroke: C.border }} tickLine={false} />
                 <YAxis hide />
                 <Tooltip content={<RichTooltip modo="saldo" colorMap={{ Pago: "#E8434F", Recebido: "#00B98A" }} />} />
-                <Bar dataKey="Pago" fill="url(#gPago)" radius={[4, 4, 0, 0]}>
-                  {tendencia.map((d, i) => <Cell key={i} fillOpacity={d.fora ? 0.3 : 1} />)}
+                <Bar dataKey="Pago" fill="url(#gPago)" radius={[4, 4, 0, 0]} onClick={(d) => { const k = d && (d.mesKey || (d.payload && d.payload.mesKey)); if (k) escolherMes(k); }} cursor="pointer">
+                  {tendencia.map((d, i) => <Cell key={i} fillOpacity={d.fora ? 0.3 : d.sel ? 1 : 0.72} />)}
+                  <LabelList dataKey="Pago" position="top" formatter={rotuloK} style={{ fontSize: 10, fill: C.muted }} />
                 </Bar>
-                <Bar dataKey="Recebido" fill="url(#gRecebido)" radius={[4, 4, 0, 0]}>
-                  {tendencia.map((d, i) => <Cell key={i} fillOpacity={d.fora ? 0.3 : 1} />)}
+                <Bar dataKey="Recebido" fill="url(#gRecebido)" radius={[4, 4, 0, 0]} onClick={(d) => { const k = d && (d.mesKey || (d.payload && d.payload.mesKey)); if (k) escolherMes(k); }} cursor="pointer">
+                  {tendencia.map((d, i) => <Cell key={i} fillOpacity={d.fora ? 0.3 : d.sel ? 1 : 0.72} />)}
+                  <LabelList dataKey="Recebido" position="top" formatter={rotuloK} style={{ fontSize: 10, fill: C.muted }} />
                 </Bar>
               </BarChart>
             </ResponsiveContainer>
           </div>
         </div>
+        )}
 
+        {analise === "custos" && (
         <div className="in" style={{ background: C.card, boxShadow: shadowSm, borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "200ms" }}>
           <div style={{ fontWeight: 700, fontSize: 13.5, color: C.ink, marginBottom: 10 }}>Maiores custos — {mesLabel}</div>
           {topCustos.length === 0 ? (
             <div style={{ color: C.muted, fontSize: 13, padding: "16px 0", textAlign: "center" }}>Sem custos lançados neste mês.</div>
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              {topCustos.map((c, i) => {
-                const v = c.valor;
-                const intensidade = v / topMax; // 0..1, share of the heaviest cost this month
-                const tint = intensidade > 0.7 ? C.coralSoft : intensidade > 0.4 ? C.amberSoft : "transparent";
-                const valueColor = intensidade > 0.7 ? C.coral : intensidade > 0.4 ? C.amber : C.muted;
-                return (
-                  <div key={c.id} style={{ background: tint, borderRadius: 8, padding: "5px 7px", margin: "-5px -7px" }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, marginBottom: 4 }}>
-                      <span style={{ color: C.ink, fontWeight: 600 }}>
-                        {c.descricao}
-                        {c.fontes.length > 1 && <span style={{ color: C.faint, fontWeight: 500, fontSize: 11 }}> · {c.fontes.length} fontes</span>}
-                      </span>
-                      <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: valueColor, fontWeight: intensidade > 0.7 ? 700 : 400 }}>{fmtBRL(v)}</span>
-                    </div>
-                    <ProgressBar pct={(v / topMax) * 100} color={c.fontes.length === 1 ? fonteColor(c.fontes[0]) : C.lavender} height={6} />
+              {topCustos.map((c, i) => (
+                <div key={c.id}>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 5 }}>
+                    <span style={{ width: 16, fontSize: 11, fontWeight: 700, color: C.faint }}>{i + 1}</span>
+                    <span style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 600, color: C.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {c.descricao}
+                      {c.fontes.length > 1 && <span style={{ color: C.faint, fontWeight: 500, fontSize: 11 }}> · {c.fontes.length} fontes</span>}
+                    </span>
+                    <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12.5, color: i === 0 ? C.coral : C.muted, fontWeight: i === 0 ? 700 : 500 }}>{hidden ? "•••" : fmtBRL(c.valor)}</span>
                   </div>
-                );
-              })}
+                  <div style={{ height: 5, borderRadius: 3, background: C.border, marginLeft: 24, overflow: "hidden" }}>
+                    <div style={{ width: `${(c.valor / topMax) * 100}%`, height: "100%", borderRadius: 3, background: c.fontes.length === 1 ? fonteColor(c.fontes[0]) : C.lavender, opacity: i === 0 ? 1 : 0.8 }} />
+                  </div>
+                </div>
+              ))}
             </div>
           )}
         </div>
+        )}
+
+        {analise === "custos" && (
         <div className="in" style={{ background: C.card, boxShadow: shadowSm, borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "240ms", display: "flex", flexDirection: "column" }}>
           <div style={{ fontWeight: 700, fontSize: 13.5, color: C.ink, marginBottom: 4 }}>Este mês x mês anterior — por fonte</div>
           <div style={{ fontSize: 11.5, color: C.faint, marginBottom: 10 }}>{monthLabel(mesAnterior)} (cinza) x {mesLabel}</div>
@@ -2757,17 +3184,28 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
             <div style={{ color: C.muted, fontSize: 13, padding: "16px 0", textAlign: "center" }}>Sem custos nos dois meses para comparar.</div>
           ) : (
             <>
-              <div style={{ width: "100%", flex: 1, minHeight: 200 }}>
-                <ResponsiveContainer width="100%" height="100%" minHeight={200}>
-                  <BarChart data={comparativo} barGap={3} margin={{ top: 16, bottom: 4 }}>
-                    <XAxis dataKey="fonte" interval={0} height={44}
-                      tick={<WrapTick fmt={(v) => v.replace("Débito Automático", "Déb. Automático")} />} axisLine={{ stroke: C.border }} tickLine={false} />
-                    <YAxis hide />
-                    <Tooltip content={<RichTooltip modo="variacao" colorMap={{ Anterior: C.barCinza, Atual: "#E8434F" }} />} />
-                    <Bar dataKey="Anterior" fill={C.barCinza} radius={[4, 4, 0, 0]}><LabelList dataKey="Anterior" position="top" formatter={rotuloK} style={{ fontSize: 10, fill: C.faint }} /></Bar>
-                    <Bar dataKey="Atual" fill="url(#gPago)" radius={[4, 4, 0, 0]}><LabelList dataKey="Atual" position="top" formatter={rotuloK} style={{ fontSize: 10, fill: C.muted, fontWeight: 700 }} /></Bar>
-                  </BarChart>
-                </ResponsiveContainer>
+              <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+                {comparativo.map(r => {
+                  const mx = Math.max(1, ...comparativo.map(x => Math.max(x.Atual, x.Anterior)));
+                  const d = r.Atual - r.Anterior;
+                  return (
+                    <div key={r.fonte}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, marginBottom: 6 }}>
+                        <span style={{ fontSize: 13, fontWeight: 600, color: C.ink }}>{r.fonte}</span>
+                        {Math.abs(d) > 0.005 && <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11.5, fontWeight: 700, color: d > 0 ? C.coral : C.emerald }}>{d > 0 ? "+" : "−"}{hidden ? "•••" : fmtBRL(Math.abs(d))}</span>}
+                      </div>
+                      <div style={{ height: 5, borderRadius: 3, background: C.border, overflow: "hidden", marginBottom: 4 }}>
+                        <div style={{ width: `${(r.Anterior / mx) * 100}%`, height: "100%", borderRadius: 3, background: C.barCinza }} />
+                      </div>
+                      <div style={{ height: 8, borderRadius: 4, background: C.border, overflow: "hidden" }}>
+                        <div style={{ width: `${(r.Atual / mx) * 100}%`, height: "100%", borderRadius: 4, background: fonteColor(r.fonte) }} />
+                      </div>
+                      <div style={{ display: "flex", justifyContent: "space-between", fontFamily: "'IBM Plex Mono', monospace", fontSize: 10.5, color: C.faint, marginTop: 3 }}>
+                        <span>{hidden ? "•••" : fmtBRL(r.Anterior)}</span><span style={{ color: C.muted }}>{hidden ? "•••" : fmtBRL(r.Atual)}</span>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
               {variacoes[0] && ehMesCorrente && new Date().getDate() < 15 && (
                 <div style={{ fontSize: 12, color: C.faint, marginTop: 8 }}>
@@ -2786,57 +3224,89 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
             </>
           )}
         </div>
+        )}
 
+        {analise === "evolucao" && movConta.rows.length >= 2 && movConta.contas.length > 0 && (
         <div className="in" style={{ background: C.card, boxShadow: shadowSm, borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "280ms", display: "flex", flexDirection: "column" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
-            <span style={{ fontWeight: 700, fontSize: 13.5, color: C.ink }}>Saldo acumulado — {ano}</span>
-            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, fontWeight: 700, color: acumColor }}>{hidden ? "•••" : fmtBRL(acumAtual)}</span>
+          <div style={{ fontWeight: 700, fontSize: 13.5, color: C.ink, marginBottom: 4 }}>Movimento acumulado por conta</div>
+          <div style={{ fontSize: 11.5, color: C.faint, marginBottom: 10 }}>Entradas menos saídas de cada conta desde {MESES[inicioIdx].toLowerCase()} (movimento, sem saldo inicial)</div>
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", fontSize: 11.5, fontWeight: 600, color: C.muted, marginBottom: 6 }}>
+            {movConta.contas.map(k => {
+              const ult = movConta.rows[movConta.rows.length - 1][k];
+              return (
+                <span key={k} style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                  <span style={{ width: 9, height: 9, borderRadius: 3, background: fonteColor(k) }} />
+                  {k === "Conta Salário" ? "CS" : k === "Conta Corrente" ? "CC" : k}{" "}
+                  <strong style={{ color: ult < 0 ? C.coral : C.ink, fontVariantNumeric: "tabular-nums" }}>{hidden ? "•••" : fmtBRL(ult)}</strong>
+                </span>
+              );
+            })}
           </div>
-          <div style={{ fontSize: 11.5, color: C.faint, marginBottom: 10 }}>Soma dos saldos mês a mês desde {inicioIdx === 0 ? "janeiro" : MESES[inicioIdx].toLowerCase()}</div>
-          <div style={{ width: "100%", flex: 1, minHeight: 170 }}>
-            <ResponsiveContainer width="100%" height="100%" minHeight={170}>
-              <AreaChart data={acumulado.slice(inicioIdx)} margin={{ top: 8, right: 10, left: 10 }}>
+          <div style={{ width: "100%", flex: 1, minHeight: 180 }}>
+            <ResponsiveContainer width="100%" height="100%" minHeight={180}>
+              <AreaChart data={movConta.rows} margin={{ top: 8, right: 10, left: 10 }}>
                 <defs>
-                  <linearGradient id="gAcum" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor={acumColor} stopOpacity={0.45} /><stop offset="100%" stopColor={acumColor} stopOpacity={0.02} />
-                  </linearGradient>
+                  {movConta.contas.map((k, mi) => (
+                    <linearGradient key={k} id={`gMov${mi}`} x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor={fonteColor(k)} stopOpacity={0.2} /><stop offset="100%" stopColor={fonteColor(k)} stopOpacity={0.02} />
+                    </linearGradient>
+                  ))}
                 </defs>
+                <CartesianGrid vertical={false} stroke={C.border} strokeDasharray="3 4" />
                 <XAxis dataKey="mes" tick={{ fontSize: 11, fill: C.faint }} axisLine={{ stroke: C.border }} tickLine={false} />
                 <YAxis hide />
-                <ReferenceLine y={0} stroke={C.border} />
-                <Tooltip separator=": " cursor={{ stroke: C.border, strokeWidth: 1 }} formatter={(v) => fmtBRL(v)} contentStyle={{ borderRadius: 10, border: "none", background: C.card, boxShadow: shadowMd, fontSize: 12.5, color: C.ink }} itemStyle={{ color: C.ink }} labelStyle={{ color: C.muted }} />
-                <Area type="monotone" dataKey="Acumulado" stroke={acumColor} strokeWidth={2.5} fill="url(#gAcum)" dot={{ r: 3.5, fill: acumColor, strokeWidth: 0 }} activeDot={{ r: 5 }} connectNulls={false} />
+                <ReferenceLine y={0} stroke={C.border} strokeDasharray="3 3" />
+                <Tooltip content={<TooltipPT />} cursor={{ stroke: C.border, strokeWidth: 1 }} />
+                {movConta.contas.map((k, mi) => (
+                  <Area key={k} type="monotone" dataKey={k} stroke={fonteColor(k)} strokeWidth={2.5} fill={`url(#gMov${mi})`} isAnimationActive={false}
+                    dot={(p) => p.index === movConta.rows.length - 1 && p.cx != null
+                      ? <circle key={"d" + p.index} cx={p.cx} cy={p.cy} r={4.5} fill={fonteColor(k)} stroke={C.card} strokeWidth={2} />
+                      : <g key={"d" + p.index} />}
+                    activeDot={{ r: 5 }} />
+                ))}
               </AreaChart>
             </ResponsiveContainer>
           </div>
         </div>
+        )}
+        {analise === "receitas" && (
         <div className="in" style={{ background: C.card, boxShadow: shadowSm, borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "320ms" }}>
           <div style={{ fontWeight: 700, fontSize: 13.5, color: C.ink, marginBottom: 4 }}>Receitas previstas x recebidas — {mesLabel}</div>
-          <div style={{ fontSize: 11.5, color: C.faint, marginBottom: 10 }}>Cinza é o previsto, verde é o que já entrou</div>
+          <div style={{ fontSize: 11.5, color: C.faint, marginBottom: 10 }}>O que já entrou, sobre o que estava previsto</div>
           {receitasComparativo.length === 0 ? (
             <div style={{ color: C.muted, fontSize: 13, padding: "16px 0", textAlign: "center" }}>Sem receitas lançadas neste mês.</div>
           ) : (
-            <div style={{ width: "100%", height: 200 }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={receitasComparativo} barGap={3} margin={{ bottom: 4 }}>
-                  <XAxis dataKey="nome" interval={0} height={44}
-                    tick={<WrapTick max={receitasComparativo.length > 5 ? 9 : 11} />} axisLine={{ stroke: C.border }} tickLine={false} />
-                  <YAxis hide />
-                  <Tooltip separator=": " cursor={{ stroke: C.border, strokeWidth: 1 }} formatter={(v) => fmtBRL(v)} contentStyle={{ borderRadius: 10, border: "none", background: C.card, boxShadow: shadowMd, fontSize: 12.5, color: C.ink }} itemStyle={{ color: C.ink }} labelStyle={{ color: C.muted }} />
-                  <Bar dataKey="Previsto" fill={C.barCinza} radius={[4, 4, 0, 0]} />
-                  <Bar dataKey="Recebido" fill={C.emerald} radius={[4, 4, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
+            <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+              {receitasComparativo.map(r => {
+                const pct = r.Previsto > 0 ? Math.min(100, (r.Recebido / r.Previsto) * 100) : (r.Recebido > 0 ? 100 : 0);
+                const falta = r.Previsto - r.Recebido;
+                return (
+                  <div key={r.nome}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, marginBottom: 6 }}>
+                      <span style={{ fontSize: 13, fontWeight: 600, color: C.ink, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{tituloBonito(r.nome)}</span>
+                      <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: C.muted, flexShrink: 0 }}>
+                        <strong style={{ color: r.Recebido > 0 ? C.emerald : C.faint }}>{hidden ? "•••" : fmtBRL(r.Recebido)}</strong>
+                        <span style={{ color: C.faint }}> de {hidden ? "•••" : fmtBRL(r.Previsto)}</span>
+                      </span>
+                    </div>
+                    <div style={{ height: 7, borderRadius: 4, background: C.border, overflow: "hidden" }}>
+                      <div style={{ width: `${pct}%`, height: "100%", borderRadius: 4, background: "linear-gradient(90deg, #00E0A8, #22D3EE)" }} />
+                    </div>
+                    {falta > 0.005 && <div style={{ fontSize: 11, color: C.faint, marginTop: 4 }}>falta {hidden ? "•••" : fmtBRL(falta)}</div>}
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
+        )}
 
         {/* alignSelf: start — a short list must not be stretched to the height of its neighbour */}
+        {analise === "custos" && (
         <div style={{ alignSelf: "start", display: "flex", flexDirection: "column", gap: 20 }}>
-          <AttentionCard itens={proximos30} onNavigate={onNavigate} onConcluirDemanda={onConcluirDemanda} title="Agenda · próximos 30 dias" limit={8} neutro agenda flush
-            emptyText="Nada agendado nos próximos 30 dias." />
           <PixMesCard pix={pixMes} mesLabel={mesLabel} hidden={hidden} />
         </div>
+        )}
       </div>
     </div>
   );
@@ -2898,6 +3368,8 @@ function agruparDivididos(items) {
 function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJump, fixos = [], fixosErro = false, onAddFixo, onUpdateFixo, onRemoveFixo }) {
   const [showFixos, setShowFixos] = useState(false);
   const [mesFiltro, setMesFiltro] = useState(currentMonth());
+  const [showSeletorMesC, setShowSeletorMesC] = useState(false);
+  const [showFontes, setShowFontes] = useState(false);
   useMesCorrenteAuto(setMesFiltro);
   const [fonteFiltro, setFonteFiltro] = useState("Todas");
   // Old records may still carry a fonte that is no longer offered (BB, plain "Transferência"); keep them filterable.
@@ -2957,15 +3429,16 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
   };
 
   // "Lançar" on a fixo: opens the normal form pre-filled (nothing is saved until the person saves).
-  const lancarFixo = (fx, pagoHoje = false) => {
+  const lancarFixo = (fx, pagoHoje = false, mesAlvo = null) => {
+    const mf = mesAlvo || mesFiltro;
     setEditingId(null);
     // Sem valor/fonte no fixo: sugere os do lançamento do mês anterior com o mesmo nome (o formulário mostra; só grava no Salvar).
-    const [ay, am] = mesFiltro.split("-").map(Number);
+    const [ay, am] = mf.split("-").map(Number);
     const mesAnt = am === 1 ? `${ay - 1}-12` : `${ay}-${String(am - 1).padStart(2, "0")}`;
     const ant = custos.find(c => c.mes === mesAnt && normDesc(c.descricao) === normDesc(fx.descricao));
     const valorBase = fx.valor || (ant ? Number(ant.valorPrevisto || ant.valorPago || 0) : 0);
     const pagoEsp = fx.valorPago || valorBase || 0;
-    setForm({ ...blankCusto(mesFiltro), descricao: fx.descricao, vencimento: vencimentoDoFixo(fx, mesFiltro),
+    setForm({ ...blankCusto(mf), descricao: fx.descricao, vencimento: vencimentoDoFixo(fx, mf),
       valorPrevisto: valorBase ? fmtValorInput(valorBase) : "", fonte: fx.fonte || (ant && ant.fonte) || FONTES[0],
       ...(pagoHoje ? { status: "Pago", dataPagamento: todayISO(), valorPago: pagoEsp ? fmtValorInput(pagoEsp) : "" } : {}) });
     setShowForm(true);
@@ -2974,7 +3447,17 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
   useEffect(() => {
     if (!jumpTarget) return;
     const item = custos.find(c => c.id === jumpTarget.id);
-    if (item) { setMesFiltro(item.mes); openEdit(item); }
+    if (item) {
+      setMesFiltro(item.mes); openEdit(item);
+      // "Pagar" vindo do Início: abre o formulário já com Pago/hoje/valor previsto. Só grava quando você tocar em Salvar.
+      if (jumpTarget.pagar) setForm(f => ({ ...f, status: "Pago", dataPagamento: todayISO(), valorPago: f.valorPago || (item.valorPrevisto ? fmtValorInput(item.valorPrevisto) : "") }));
+    }
+    if (jumpTarget.lancarFixo) {
+      const fx = fixos.find(x => x.descricao === jumpTarget.lancarFixo);
+      const m = jumpTarget.mes || currentMonth();
+      if (fx) { setMesFiltro(m); lancarFixo(fx, false, m); }
+    }
+    if (jumpTarget.novo) openNew();
     if (jumpTarget.abrirFixos) setShowFixos(true);
     onConsumeJump();
   }, [jumpTarget]);
@@ -3023,7 +3506,7 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
         const difPg = valorPagoNum - valorPrevistoNum;
         const linhaPrev = Math.abs(difPg) > 0.005 ? `\nPrevisto: ${fmtBRL(valorPrevistoNum)} (${difPg > 0 ? "+" : "−"}${fmtBRL(Math.abs(difPg))})` : "";
         const resumo = `${form.descricao}\nValor pago: ${fmtBRL(valorPagoNum)}${linhaPrev}\nFonte: ${form.fonte}\nData do pagamento: ${fmtDate(form.dataPagamento)}`;
-        if (!(await confirmar(`${resumo}\n\nA fonte está certa?`, { titulo: "Marcar como Pago?", okLabel: "Sim, confirmar" }))) return;
+        if (!(await confirmar(`${resumo}\n\nConfirma todos os dados?`, { titulo: "Marcar como Pago?", okLabel: "Sim, confirmar" }))) return;
       }
     }
     const valorPagoFinal = valorPagoNum;
@@ -3118,42 +3601,43 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
 
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-        <h2 style={{ margin: 0, fontFamily: "'Fraunces', serif", fontWeight: 700, fontSize: 25, letterSpacing: -0.4, color: C.pageInk }}>Custos</h2>
-        <div style={{ display: "flex", gap: 8 }}>
-          <button className="tap" onClick={openNew} style={addBtnStyle}><Plus size={16} /> Novo</button>
-        </div>
-      </div>
-
-      <FilterBar>
-        <Field label="Mês"><TextInput type="month" value={mesFiltro} onChange={e => setMesFiltro(e.target.value)} /></Field>
-        <div style={{ display: "flex", gap: 6 }}>
-          <button type="button" onClick={() => setMesFiltro(m => shiftMonth(m, -1))} style={monthNavBtnStyle} aria-label="Mês anterior">‹</button>
-          <button type="button" onClick={() => setMesFiltro(m => shiftMonth(m, 1))} style={monthNavBtnStyle} aria-label="Próximo mês">›</button>
-        </div>
-        <Field label="Fonte"><SelectInput options={["Todas", ...FONTES_FORM, ...fontesLegadas]} value={fonteFiltro} onChange={e => setFonteFiltro(e.target.value)} /></Field>
-      </FilterBar>
-
-      <StatRow stats={[
-        { icon: <Wallet size={12} />, label: "Previsto", value: fmtBRL(totals.totalPrevisto) },
-        { icon: <Check size={12} />, label: "Pago", value: fmtBRL(totals.totalPago) },
-        // For custos, paying LESS than planned isn't a warning — only spending
-        // more than planned is, so the Diferença stays neutral otherwise.
-        (totals.pendentes + totals.atrasados > 0)
-          ? { icon: <Clock size={12}/>, label: "Falta pagar", value: fmtBRL(totals.faltaPagar), tone: totals.atrasados > 0 ? "red" : "gold" }
-          : (filtrados.length > 0 && totals.diferenca < -0.005)
-          ? { icon: <TrendingDown size={12}/>, label: "Economia", value: fmtBRL(-totals.diferenca), tone: "green" }
-          : { icon: totals.diferenca < 0 ? <TrendingDown size={12}/> : <TrendingUp size={12}/>, label: totals.diferenca > 0.005 ? "Acima do previsto" : "Diferença", value: fmtBRL(totals.diferenca), tone: totals.diferenca > 0.005 ? "red" : undefined },
-        { icon: <Clock size={12} />, label: "Pago/Pend./Atr.", value: (
-          <span>
-            <span style={{ color: totals.pagos > 0 ? C.emerald : C.faint }}>{totals.pagos}</span>
-            <span style={{ color: C.faint }}>/</span>
-            <span style={{ color: totals.pendentes > 0 ? C.amber : C.faint }}>{totals.pendentes}</span>
-            <span style={{ color: C.faint }}>/</span>
-            <span style={{ color: totals.atrasados > 0 ? C.coral : C.faint }}>{totals.atrasados}</span>
-          </span>
-        ) },
-      ]} />
+      <TabHero titulo="Custos" mesLabel={monthLabel(mesFiltro)} onLabelClick={() => setShowSeletorMesC(true)}
+        destaque={(totals.pendentes + totals.atrasados > 0)
+          ? { rotulo: "Falta pagar", valor: fmtBRL(totals.faltaPagar), cor: totals.atrasados > 0 ? "#FF8A76" : "#FFC53D", sub: `Pago ${fmtBRL(totals.totalPago)} de ${fmtBRL(totals.totalPrevisto)}` }
+          : { rotulo: "Pago no mês", valor: fmtBRL(totals.totalPago), cor: "#4FE8BE", sub: `de ${fmtBRL(totals.totalPrevisto)} previsto${filtrados.length > 0 && totals.diferenca < -0.005 ? ` · economia de ${fmtBRL(-totals.diferenca)}` : totals.diferenca > 0.005 ? ` · ${fmtBRL(totals.diferenca)} acima do previsto` : ""}` }}
+        chips={[
+          ...(totals.pagos > 0 ? [{ t: `${totals.pagos} ${totals.pagos === 1 ? "pago" : "pagos"}`, cor: "#4FE8BE" }] : []),
+          ...(totals.pendentes > 0 ? [{ t: `${totals.pendentes} ${totals.pendentes === 1 ? "pendente" : "pendentes"}`, cor: "#FFC53D" }] : []),
+          ...(totals.atrasados > 0 ? [{ t: `${totals.atrasados} ${totals.atrasados === 1 ? "atrasado" : "atrasados"}`, cor: "#FF8A76" }] : [])
+        ]}
+        pct={totals.totalPrevisto > 0 ? (totals.totalPago / totals.totalPrevisto) * 100 : 0}
+        pctLabel={totals.totalPrevisto > 0 ? `${Math.round((totals.totalPago / totals.totalPrevisto) * 100)}% do previsto pago` : null}
+        acao={{ label: "Novo", onClick: openNew }}
+        onPrev={() => setMesFiltro(m => shiftMonth(m, -1))} onNext={() => setMesFiltro(m => shiftMonth(m, 1))}
+        rodapeExtra={(
+          <button type="button" className="tap" onClick={() => setShowFontes(true)} aria-label="Filtrar por fonte de pagamento"
+            style={{ display: "flex", alignItems: "center", gap: 6, height: 34, padding: "0 12px", borderRadius: 11, cursor: "pointer", fontFamily: "inherit", fontSize: 12.5, fontWeight: 700,
+              border: `1px solid ${fonteFiltro !== "Todas" ? "#00E0A8" : "rgba(255,255,255,0.14)"}`, background: fonteFiltro !== "Todas" ? "rgba(0,224,168,0.14)" : "rgba(255,255,255,0.06)", color: fonteFiltro !== "Todas" ? "#4FE8BE" : "#D5DBF5" }}>
+            {fonteFiltro === "Todas" ? "Todas as fontes" : fonteFiltro}<ChevronDown size={14} />
+          </button>
+        )} />
+      {showFontes && (
+        <Modal title="Fonte de pagamento" onClose={() => setShowFontes(false)}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {["Todas", ...FONTES_FORM, ...fontesLegadas].map(f => {
+              const sel = fonteFiltro === f;
+              return (
+                <button key={f} type="button" className="tap" onClick={() => { setFonteFiltro(f); setShowFontes(false); }}
+                  style={{ display: "flex", alignItems: "center", justifyContent: "space-between", textAlign: "left", fontFamily: "inherit", fontSize: 14, fontWeight: sel ? 800 : 600, padding: "11px 14px", borderRadius: 12, cursor: "pointer",
+                    border: `1px solid ${sel ? C.emerald : C.border}`, background: sel ? C.emeraldSoft : "transparent", color: sel ? C.emerald : C.ink }}>
+                  {f === "Todas" ? "Todas as fontes" : f}{sel && <Check size={16} />}
+                </button>
+              );
+            })}
+          </div>
+        </Modal>
+      )}
+      {showSeletorMesC && <SeletorMes mes={mesFiltro} onPick={setMesFiltro} onClose={() => setShowSeletorMesC(false)} />}
 
       {proximo && <ProximoVencLed info={proximo} onOpen={openEdit} />}
 
@@ -3300,8 +3784,9 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
 /*  Receitas Mensais                                                   */
 /* ------------------------------------------------------------------ */
 
-function ReceitasTab({ receitas, onAdd, onRemove, onUpdate, inicioContagem }) {
+function ReceitasTab({ receitas, onAdd, onRemove, onUpdate, inicioContagem, jumpTarget, onConsumeJump }) {
   const [mesFiltro, setMesFiltro] = useState(currentMonth());
+  const [showSeletorMesR, setShowSeletorMesR] = useState(false);
   useMesCorrenteAuto(setMesFiltro);
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
@@ -3348,6 +3833,11 @@ function ReceitasTab({ receitas, onAdd, onRemove, onUpdate, inicioContagem }) {
   const destinoManual = useRef(false);
 
   const openNew = () => { destinoManual.current = false; setEditingId(null); setForm(blankReceita(mesFiltro)); setShowForm(true); };
+  useEffect(() => {
+    if (!jumpTarget) return;
+    if (jumpTarget.novo) openNew();
+    onConsumeJump && onConsumeJump();
+  }, [jumpTarget]);
   const openEdit = (r) => {
     destinoManual.current = true;
     setEditingId(r.id);
@@ -3422,7 +3912,7 @@ function ReceitasTab({ receitas, onAdd, onRemove, onUpdate, inicioContagem }) {
         const difRc = valorRecebidoNum - valorPrevistoNum;
         const linhaPrevR = Math.abs(difRc) > 0.005 ? `\nPrevisto: ${fmtBRL(valorPrevistoNum)} (${difRc > 0 ? "+" : "−"}${fmtBRL(Math.abs(difRc))})` : "";
         const resumo = `${form.descricao}\nValor recebido: ${fmtBRL(valorRecebidoNum)}${linhaPrevR}\nConta: ${form.contaDestino || "—"}\nData do recebimento: ${fmtDate(form.dataRecebimento)}`;
-        if (!(await confirmar(`${resumo}\n\nA conta está certa?`, { titulo: "Marcar como Recebida?", okLabel: "Sim, confirmar" }))) return;
+        if (!(await confirmar(`${resumo}\n\nConfirma todos os dados?`, { titulo: "Marcar como Recebida?", okLabel: "Sim, confirmar" }))) return;
       }
     }
     const payload = { ...form, valorPrevisto: valorPrevistoNum, valorRecebido: valorRecebidoNum };
@@ -3439,33 +3929,19 @@ function ReceitasTab({ receitas, onAdd, onRemove, onUpdate, inicioContagem }) {
 
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-        <h2 style={{ margin: 0, fontFamily: "'Fraunces', serif", fontWeight: 700, fontSize: 25, letterSpacing: -0.4, color: C.pageInk }}>Receitas</h2>
-        <button className="tap" onClick={openNew} style={addBtnStyle}><Plus size={16} /> Nova</button>
-      </div>
-
-      <FilterBar>
-        <Field label="Mês"><TextInput type="month" value={mesFiltro} onChange={e => setMesFiltro(e.target.value)} /></Field>
-        <div style={{ display: "flex", gap: 6 }}>
-          <button type="button" onClick={() => setMesFiltro(m => shiftMonth(m, -1))} style={monthNavBtnStyle} aria-label="Mês anterior">‹</button>
-          <button type="button" onClick={() => setMesFiltro(m => shiftMonth(m, 1))} style={monthNavBtnStyle} aria-label="Próximo mês">›</button>
-        </div>
-      </FilterBar>
-
-      <StatRow stats={[
-        { icon: <PiggyBank size={12} />, label: "Previsto", value: fmtBRL(totals.totalPrevisto) },
-        { icon: <Check size={12} />, label: "Recebido", value: fmtBRL(totals.totalRecebido) },
-        totals.pendentes > 0
-          ? { icon: <Clock size={12}/>, label: "A receber", value: fmtBRL(totals.aReceber), tone: "gold" }
-          : { icon: totals.diferenca < 0 ? <TrendingDown size={12}/> : <TrendingUp size={12}/>, label: totals.diferenca < -0.005 ? "Abaixo do previsto" : "Diferença", value: fmtBRL(totals.diferenca), tone: totals.diferenca < 0 ? "red" : "green" },
-        { icon: <Clock size={12} />, label: "Receb./Pend.", value: (
-          <span>
-            <span style={{ color: totals.recebidas > 0 ? C.emerald : C.faint }}>{totals.recebidas}</span>
-            <span style={{ color: C.faint }}>/</span>
-            <span style={{ color: totals.pendentes > 0 ? C.amber : C.faint }}>{totals.pendentes}</span>
-          </span>
-        ) },
-      ]} />
+      <TabHero titulo="Receitas" mesLabel={monthLabel(mesFiltro)} onLabelClick={() => setShowSeletorMesR(true)}
+        destaque={totals.pendentes > 0
+          ? { rotulo: "A receber", valor: fmtBRL(totals.aReceber), cor: "#FFC53D", sub: `Recebido ${fmtBRL(totals.totalRecebido)} de ${fmtBRL(totals.totalPrevisto)}` }
+          : { rotulo: "Recebido no mês", valor: fmtBRL(totals.totalRecebido), cor: "#4FE8BE", sub: `de ${fmtBRL(totals.totalPrevisto)} previsto${totals.diferenca < -0.005 ? ` · ${fmtBRL(-totals.diferenca)} abaixo do previsto` : ""}` }}
+        chips={[
+          ...(totals.recebidas > 0 ? [{ t: `${totals.recebidas} ${totals.recebidas === 1 ? "recebida" : "recebidas"}`, cor: "#4FE8BE" }] : []),
+          ...(totals.pendentes > 0 ? [{ t: `${totals.pendentes} ${totals.pendentes === 1 ? "pendente" : "pendentes"}`, cor: "#FFC53D" }] : [])
+        ]}
+        pct={totals.totalPrevisto > 0 ? (totals.totalRecebido / totals.totalPrevisto) * 100 : 0}
+        pctLabel={totals.totalPrevisto > 0 ? `${Math.round((totals.totalRecebido / totals.totalPrevisto) * 100)}% do previsto recebido` : null}
+        acao={{ label: "Nova", onClick: openNew }}
+        onPrev={() => setMesFiltro(m => shiftMonth(m, -1))} onNext={() => setMesFiltro(m => shiftMonth(m, 1))} />
+      {showSeletorMesR && <SeletorMes mes={mesFiltro} onPick={setMesFiltro} onClose={() => setShowSeletorMesR(false)} />}
 
       {proximo && <ProximoVencLed info={proximo} onOpen={openEdit} entrada />}
 
@@ -3480,7 +3956,7 @@ function ReceitasTab({ receitas, onAdd, onRemove, onUpdate, inicioContagem }) {
                   <ResponsiveContainer width="100%" height="100%">
                     <PieChart>
                       <Pie data={porConta.map(([name, value]) => ({ name, value }))} dataKey="value" nameKey="name" innerRadius={36} outerRadius={58} paddingAngle={porConta.length > 1 ? 2 : 0}>
-                        {porConta.map(([f]) => <Cell key={f} fill={fonteColor(f)} />)}
+                        {porConta.map(([f]) => <Cell key={f} fill={fonteColorIn(f)} />)}
                       </Pie>
                       <Tooltip separator=": " formatter={(v) => fmtBRL(v)} contentStyle={{ borderRadius: 10, border: "none", background: C.card, boxShadow: shadowMd, fontSize: 12, color: C.ink }} itemStyle={{ color: C.ink }} labelStyle={{ color: C.muted }} />
                     </PieChart>
@@ -3489,7 +3965,7 @@ function ReceitasTab({ receitas, onAdd, onRemove, onUpdate, inicioContagem }) {
                 <div style={{ display: "flex", flexDirection: "column", gap: 6, flex: "0 1 auto" }}>
                   {porConta.map(([f, v]) => (
                     <div key={f} style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12 }}>
-                      <span style={{ width: 8, height: 8, borderRadius: 3, background: fonteColor(f), flexShrink: 0 }} />
+                      <span style={{ width: 8, height: 8, borderRadius: 3, background: fonteColorIn(f), flexShrink: 0 }} />
                       <span style={{ color: C.ink, minWidth: 112 }}>{f}</span>
                       <span style={{ fontSize: 10.5, color: C.faint, minWidth: 28, textAlign: "right" }}>{pctDe(v, porConta.map(([, x]) => ({ value: x })))}</span>
                       <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: C.muted, fontSize: 11.5 }}>{fmtBRL(v)}</span>
@@ -3665,10 +4141,13 @@ function ResumoTab({ custos, receitas, inicioContagem, onChangeInicio }) {
 
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-        <h2 style={{ margin: 0, fontFamily: "'Fraunces', serif", fontWeight: 700, fontSize: 25, letterSpacing: -0.4, color: C.pageInk }}>Resumo Anual</h2>
-        <SelectInput options={anos.map(String)} value={String(ano)} onChange={e=>setAno(parseInt(e.target.value,10))} style={{maxWidth:110}} />
-      </div>
+      <TabHero titulo="Resumo anual" mesLabel={String(ano)}
+        destaque={{ rotulo: inicioIdx > 0 ? `Saldo desde ${MESES_ABR[inicioIdx]}` : "Saldo do ano", valor: fmtBRL(anual.recebido - anual.pago), cor: anual.recebido - anual.pago < 0 ? "#FF8A76" : "#4FE8BE", sub: null }}
+        chips={[{ t: `Recebido ${fmtBRL(anual.recebido)}`, cor: "#4FE8BE" }, { t: `Pago ${fmtBRL(anual.pago)}`, cor: "#FF8A76" }, { t: `Previsto ${fmtBRL(anual.previsto)}` }]}
+        pct={anual.previsto > 0 ? (anual.pago / anual.previsto) * 100 : null}
+        pctLabel={anual.previsto > 0 ? `${Math.round((anual.pago / anual.previsto) * 100)}% do previsto pago` : null}
+        onPrev={() => setAno(a => a - 1)} onNext={() => setAno(a => a + 1)}
+        prevOff={!anos.includes(ano - 1)} nextOff={!anos.includes(ano + 1)} />
 
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
         <span style={{ fontSize: 12.5, color: C.muted, fontWeight: 600 }}>Contar a partir de</span>
@@ -3679,13 +4158,6 @@ function ResumoTab({ custos, receitas, inicioContagem, onChangeInicio }) {
           <span style={{ fontSize: 11.5, color: C.pageFaint }}>Meses anteriores aparecem esmaecidos e ficam fora dos totais.</span>
         )}
       </div>
-
-      <StatRow stats={[
-        { icon: <Wallet size={12}/>, label: "Previsto", value: fmtBRL(anual.previsto) },
-        { icon: <Check size={12}/>, label: "Pago", value: fmtBRL(anual.pago) },
-        { icon: <PiggyBank size={12}/>, label: "Recebido", value: fmtBRL(anual.recebido) },
-        { icon: anual.recebido-anual.pago<0?<TrendingDown size={12}/>:<TrendingUp size={12}/>, label: inicioIdx > 0 ? `Saldo desde ${MESES_ABR[inicioIdx]}` : "Saldo do Ano", value: fmtBRL(anual.recebido-anual.pago), tone: anual.recebido-anual.pago<0?"red":"green" },
-      ]} />
 
       <div style={{ background: C.card, boxShadow: shadowSm, borderRadius: 16, padding: 16, marginBottom: 16 }}>
         <div style={{ fontWeight: 700, fontSize: 13.5, color: C.ink, marginBottom: 10 }}>Saldo mês a mês</div>
@@ -3848,6 +4320,7 @@ function DemandasTab({ demandas, onAdd, onRemove, onUpdate, onStatusChange, jump
     if (!jumpTarget) return;
     const item = demandas.find(d => d.id === jumpTarget.id);
     if (item) openEdit(item);
+    if (jumpTarget.novo) openNew();
     onConsumeJump();
   }, [jumpTarget]);
 
@@ -3884,6 +4357,7 @@ function DemandasTab({ demandas, onAdd, onRemove, onUpdate, onStatusChange, jump
   const totalDemandas = demandas.length;
   const listaAtrasadas = useMemo(() => demandas.filter(d => d.status !== "Concluída" && (diasAteVenc(d.prazo) ?? 0) < 0).sort((a, b) => String(a.prazo).localeCompare(String(b.prazo))), [demandas]);
   const atrasadasDem = listaAtrasadas.length;
+  const maisUrgenteDem = useMemo(() => demandas.filter(d => d.status !== "Concluída" && d.prazo).sort((a, b) => String(a.prazo).localeCompare(String(b.prazo)))[0] || null, [demandas]);
   const [showAdiar, setShowAdiar] = useState(false);
   const [novoPrazo, setNovoPrazo] = useState("");
   const [adiarSel, setAdiarSel] = useState([]);
@@ -3905,51 +4379,19 @@ function DemandasTab({ demandas, onAdd, onRemove, onUpdate, onStatusChange, jump
 
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-        <h2 style={{ margin: 0, fontFamily: "'Fraunces', serif", fontWeight: 700, fontSize: 25, letterSpacing: -0.4, color: C.pageInk }}>Demandas</h2>
-        <button className="tap" onClick={openNew} style={addBtnStyle}><Plus size={16} /> Nova</button>
-      </div>
+      <TabHero titulo="Tarefas"
+        destaque={{ rotulo: "Em aberto", valor: `${resumo.pendente + resumo.andamento} ${(resumo.pendente + resumo.andamento) === 1 ? "tarefa" : "tarefas"}`, cor: (resumo.pendente + resumo.andamento) > 0 ? "#F3F5FA" : "#4FE8BE", sub: `${resumo.pendente} pendentes · ${resumo.andamento} em andamento · ${resumo.concluida} concluídas` }}
+        chips={[
+          ...(atrasadasDem > 0 ? [{ t: `${atrasadasDem} ${atrasadasDem === 1 ? "atrasada" : "atrasadas"} · adiar ›`, cor: "#FF8A76", onClick: abrirAdiar }] : []),
+          ...(porPrioridade.length > 1 ? porPrioridade.map(([p, n]) => ({ t: `${p} ${n}`, cor: p === "Alta" ? "#FF8A76" : p === "Média" ? "#FFC53D" : "#4FE8BE" })) : [])
+        ]}
+        pct={totalDemandas > 0 ? pctConcluido : null}
+        pctLabel={totalDemandas > 0 ? `${pctConcluido.toFixed(0)}% concluído` : null}
+        rodapeTexto={maisUrgenteDem ? `Mais urgente: ${maisUrgenteDem.nome} · ${String(maisUrgenteDem.prazo).slice(0, 4) === String(new Date().getFullYear()) ? fmtDate(maisUrgenteDem.prazo).slice(0, 5) : fmtDate(maisUrgenteDem.prazo)}` : "Nenhum prazo em aberto"}
+        rodapeCor={maisUrgenteDem && (diasAteVenc(maisUrgenteDem.prazo) ?? 0) < 0 ? "#FF8A76" : "#B8C2E8"}
+        acao={{ label: "Nova", onClick: openNew }} />
 
-      <div className="in" style={{ background: C.card, boxShadow: shadowSm, borderRadius: 16, padding: 18, marginBottom: 20 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8 }}>
-          <span style={{ fontWeight: 700, fontSize: 13, color: C.ink, textTransform: "uppercase", letterSpacing: 0.4 }}>Progresso geral</span>
-          <span style={{ fontSize: 12.5, fontWeight: 700, color: C.emerald }}>{pctConcluido.toFixed(0)}% concluído</span>
-        </div>
-        <ProgressBar pct={pctConcluido} />
-        <div style={{ display: "flex", gap: 16, marginTop: 14, flexWrap: "wrap" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <span style={{ width: 8, height: 8, borderRadius: "50%", background: C.amber }} />
-            <span style={{ fontSize: 12, color: C.muted }}>Pendentes <strong style={{ color: C.ink }}>{resumo.pendente}</strong></span>
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <span style={{ width: 8, height: 8, borderRadius: "50%", background: C.lavender }} />
-            <span style={{ fontSize: 12, color: C.muted }}>Em andamento <strong style={{ color: C.ink }}>{resumo.andamento}</strong></span>
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <span style={{ width: 8, height: 8, borderRadius: "50%", background: C.emerald }} />
-            <span style={{ fontSize: 12, color: C.muted }}>Concluídas <strong style={{ color: C.ink }}>{resumo.concluida}</strong></span>
-          </div>
-          {atrasadasDem > 0 && (
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <span style={{ width: 8, height: 8, borderRadius: "50%", background: C.coral }} />
-              <span style={{ fontSize: 12, color: C.coral, fontWeight: 700 }}>{atrasadasDem} {atrasadasDem === 1 ? "dos abertos está atrasado" : "dos abertos estão atrasados"}</span>
-              <button type="button" onClick={abrirAdiar} style={{ border: `1px solid ${C.coral}`, background: "transparent", color: C.coral, borderRadius: 9, padding: "3px 10px", fontSize: 11.5, fontWeight: 700, cursor: "pointer", marginLeft: 4 }}>Adiar atrasadas…</button>
-            </div>
-          )}
-        </div>
-        {porPrioridade.length > 1 && (
-          <div style={{ display: "flex", gap: 16, marginTop: 10 }}>
-            {porPrioridade.map(([p, count]) => (
-              <div key={p} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <span style={{ width: 8, height: 8, borderRadius: "50%", background: PRIORIDADE_COLOR[p] }} />
-                <span style={{ fontSize: 12, color: C.muted }}>{p} <strong style={{ color: C.ink }}>{count}</strong></span>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      <div className="kanban" style={{ display: "grid", gridTemplateColumns: "1fr", gap: 16 }}>
+      <div className="kanban" style={{ display: "grid", gridTemplateColumns: "1fr", gap: 16, "--kcols": COLUMNS.map(c => c.count > 0 ? "2fr" : "1fr").join(" ") }}>
         {COLUMNS.map(col => {
           const items = demandas.filter(d => d.status === col.status).sort((a, b) => {
             // Open columns: earliest prazo first (overdue on top), no prazo last. Done: latest prazo first.
@@ -3972,7 +4414,7 @@ function DemandasTab({ demandas, onAdd, onRemove, onUpdate, onStatusChange, jump
                 }}>{col.count}</span>
               </div>
               {items.length === 0 ? (
-                <div style={{ border: `1px dashed ${C.border}`, borderRadius: 14, padding: "20px 14px", textAlign: "center", color: C.faint, fontSize: 12.5 }}>
+                <div style={{ border: `1px dashed ${C.border}`, borderRadius: 14, padding: "12px 14px", textAlign: "center", color: C.faint, fontSize: 12.5 }}>
                   Nada aqui.
                 </div>
               ) : (
