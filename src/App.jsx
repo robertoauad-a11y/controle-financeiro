@@ -1351,6 +1351,7 @@ export default function App() {
   const hojeLabel = `${new Date().getDate()} de ${MESES[new Date().getMonth()].toLowerCase()}`;
   const horaAgora = new Date().getHours();
   const diaSemana = ["domingo","segunda-feira","terça-feira","quarta-feira","quinta-feira","sexta-feira","sábado"][new Date().getDay()];
+  const diaSemanaCap = diaSemana.charAt(0).toUpperCase() + diaSemana.slice(1);
   const saudacao = horaAgora < 5 ? "Boa noite" : horaAgora < 12 ? "Bom dia" : horaAgora < 18 ? "Boa tarde" : "Boa noite";
 
   // Conteúdo do topo (saudação, título, tema e menu): no Início ele vira a parte de cima do cartão de Saldo.
@@ -1472,10 +1473,12 @@ export default function App() {
             </svg>
             <div style={{ position: "absolute", top: -50, right: -40, width: 150, height: 150, borderRadius: "50%", background: `radial-gradient(circle, ${C.emeraldGlow} 0%, transparent 70%)`, opacity: 0.6 }} />
           </div>
-          <div style={{ position: "relative", display: "flex", alignItems: "baseline", gap: 10, minWidth: 0 }}>
-            <span style={{ width: 10, height: 10, borderRadius: 5, background: "linear-gradient(135deg, #00E0A8, #9AA5D1)", alignSelf: "center", flexShrink: 0 }} />
-            <span style={{ fontSize: 15, fontWeight: 800, letterSpacing: 1.3, whiteSpace: "nowrap", flexShrink: 0, textTransform: "uppercase", background: `linear-gradient(90deg, ${C.emerald}, ${C.lavender})`, WebkitBackgroundClip: "text", backgroundClip: "text", color: "transparent", WebkitTextFillColor: "transparent" }}>Pauta Tutti</span>
-            <span style={{ fontSize: 12, color: C.muted, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{diaSemana} · {hojeLabel}</span>
+          <div style={{ position: "relative", display: "flex", flexDirection: "column", gap: 3, minWidth: 0 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ width: 10, height: 10, borderRadius: 5, background: "linear-gradient(135deg, #00E0A8, #9AA5D1)", flexShrink: 0 }} />
+              <span style={{ fontSize: 15, fontWeight: 800, letterSpacing: 1.3, whiteSpace: "nowrap", flexShrink: 0, textTransform: "uppercase", background: `linear-gradient(90deg, ${C.emerald}, ${C.lavender})`, WebkitBackgroundClip: "text", backgroundClip: "text", color: "transparent", WebkitTextFillColor: "transparent" }}>Pauta Tutti</span>
+            </div>
+            <span style={{ paddingLeft: 20, fontSize: 12, color: C.muted, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{diaSemanaCap} · {hojeLabel}</span>
           </div>
           <div style={{ position: "relative" }}>{botoesApp(true)}</div>
         </header>
@@ -2506,12 +2509,12 @@ function TilesAnalise({ itens, hidden }) {
 }
 
 // Cartão de abertura das abas (Custos, Receitas, Anual, Tarefas): título, número principal, ação e navegação de mês.
-function TabHero({ titulo, mesLabel, onLabelClick, destaque, pct = null, pctLabel = null, chips = null, rodapeExtra = null, rodapeTexto = null, rodapeCor = "#B8C2E8", acao, onPrev, onNext, prevOff = false, nextOff = false }) {
+function TabHero({ titulo, mesLabel, onLabelClick, destaque, pct = null, pctLabel = null, chips = null, faixa = null, rodapeExtra = null, rodapeTexto = null, rodapeCor = "#B8C2E8", acao, onPrev, onNext, prevOff = false, nextOff = false }) {
   const navBtn = (off) => ({ width: 34, height: 34, borderRadius: 11, border: "1px solid rgba(255,255,255,0.14)", background: "rgba(255,255,255,0.06)", color: off ? "#5C6485" : "#D5DBF5", cursor: off ? "default" : "pointer", fontSize: 18, lineHeight: 1, display: "flex", alignItems: "center", justifyContent: "center" });
   const chipSt = (cor, clicavel) => ({ fontSize: 12, fontWeight: 700, padding: "4px 11px", borderRadius: 999, background: "rgba(255,255,255,0.07)", border: "1px solid rgba(255,255,255,0.12)", color: cor || "#D5DBF5", cursor: clicavel ? "pointer" : "default", fontFamily: "inherit" });
   return (
     <div className="in" style={{
-      position: "relative", display: "flex", flexDirection: "column", minHeight: 290, borderRadius: 24, padding: "20px 22px", marginBottom: 20, border: "3px solid transparent",
+      position: "relative", display: "flex", flexDirection: "column", minHeight: 340, borderRadius: 24, padding: "20px 22px", marginBottom: 20, border: "3px solid transparent",
       background: "linear-gradient(150deg, #0B0F1F 0%, #101632 60%, #0F3D33 100%) padding-box, linear-gradient(135deg, #00E0A8, #9AA5D1) border-box",
       boxShadow: "0 14px 34px rgba(11,15,31,0.28), 0 4px 12px rgba(11,15,31,0.18)"
     }}>
@@ -2550,6 +2553,7 @@ function TabHero({ titulo, mesLabel, onLabelClick, destaque, pct = null, pctLabe
           {pctLabel && <div style={{ fontSize: 11, color: "#8B93B5", fontWeight: 600, marginTop: 6, textAlign: "right" }}>{pctLabel}</div>}
         </div>
       )}
+      {faixa && <div style={{ position: "relative", marginTop: 16 }}>{faixa}</div>}
       {(onPrev || rodapeTexto || rodapeExtra) && (
         <div style={{ position: "relative", marginTop: "auto", paddingTop: 16, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
           {onPrev ? (
@@ -2597,6 +2601,23 @@ function BarraEmpilhada({ dados, corDe, hidden, nota, totalLabel = "Total" }) {
       </div>
       {dados.some(d => d.pend > 0) && <div style={{ fontSize: 10.5, color: C.faint, marginTop: 8 }}>Listrado = ainda a pagar</div>}
       {nota && <div style={{ fontSize: 10.5, color: C.faint, marginTop: 8 }}>{nota}</div>}
+    </div>
+  );
+}
+
+// Régua dos próximos 14 dias (hero de Tarefas): um ponto em cada dia que tem tarefa em aberto com prazo.
+function ReguaDias({ dias }) {
+  return (
+    <div style={{ display: "flex", gap: 4 }} aria-label="Próximos 14 dias com prazos de tarefas">
+      {dias.map(d => (
+        <div key={d.iso} style={{ flex: 1, minWidth: 0, textAlign: "center", padding: "5px 0 6px", borderRadius: 9, background: d.hoje ? "rgba(0,224,168,0.14)" : "rgba(255,255,255,0.04)", border: d.hoje ? "1px solid rgba(0,224,168,0.5)" : "1px solid transparent" }}>
+          <div style={{ fontSize: 9, fontWeight: 700, color: "#8B93B5", letterSpacing: 0.3 }}>{d.dow}</div>
+          <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11.5, fontWeight: 700, color: d.hoje ? "#4FE8BE" : "#D5DBF5", lineHeight: 1.3 }}>{d.dia}</div>
+          <div style={{ height: 8, display: "flex", alignItems: "center", justifyContent: "center" }}>
+            {d.n > 0 && <span style={{ width: d.n > 1 ? 12 : 7, height: 7, borderRadius: 4, background: "#FFC53D" }} />}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -2877,6 +2898,7 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
   const projMax = Math.max(1, projecao.recebido + projecao.aReceber + receitasEstTotal, projecao.pago + projecao.aPagar + fixosEst);
   const projQuitado = projecao.aPagar === 0 && fixosEst === 0 && receitasEstTotal === 0 && projecao.aReceber === 0 && (projecao.pago + projecao.recebido) > 0;
   const projEstimada = fixosEst > 0 || receitasEstTotal > 0;
+  const projTemDados = (projecao.pago + projecao.recebido + projecao.aPagar + projecao.aReceber + fixosEst + receitasEstTotal) > 0;
 
   // "Próximos dias": fixos a lançar + custos e tarefas que vêm pela frente, tudo em ordem de data.
   const proximosDias = useMemo(() => {
@@ -3043,9 +3065,9 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
         curva={curva}
         atencao={{ n: central.nUrgentes, parados: (central.parados || []).length, onOpen: () => setAtencaoAberta(true), pulsar: pulsarAtencao }}
         situacao={!ehMesCorrente ? [] : [
-          ...(ritmo.disponivel ? [{ t: `Ritmo ${ritmo.pct.toFixed(0)}% do normal`, cor: ritmo.pct > 150 ? "#FF8A76" : ritmo.pct > 100 ? "#FFC53D" : "#4FE8BE" }] : []),
+          ...(ritmo.disponivel ? [{ t: `Ritmo ${ritmo.pct.toFixed(0)}% do normal`, cor: Math.round(ritmo.pct) > 150 ? "#FF8A76" : Math.round(ritmo.pct) > 100 ? "#FFC53D" : "#4FE8BE" }] : []),
           ...(fixosEst > 0 ? [{ t: `Faltam ${fmtBRL(fixosEst)} em fixos ›`, cor: "#B8BFDB", onClick: () => onNavigate && onNavigate("custos", null, { abrirFixos: true }) }] : []),
-          ...(projQuitado ? [] : [{ t: `Fecha em ${fmtBRL(saldoEstimado)} (estimativa)`, cor: saldoEstimado < 0 ? "#FF8A76" : "#4FE8BE" }])
+          ...(projQuitado || !projTemDados ? [] : [{ t: `Fecha em ${fmtBRL(saldoEstimado)} (estimativa)`, cor: saldoEstimado < 0 ? "#FF8A76" : "#4FE8BE" }])
         ]}
         porFonte={saldoPorFonte}
         contasLinha={saldoPorFonte.filter(f => f.fonte !== "—").slice().sort((a, b) => FONTES.indexOf(a.fonte) - FONTES.indexOf(b.fonte))}
@@ -3097,7 +3119,7 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
         </div>}
         {receitasEstTotal > 0 && (
           <div style={{ fontSize: 11.5, color: C.faint, marginTop: 10, lineHeight: 1.45 }}>
-            Inclui {hidden ? "•••" : fmtBRL(receitasEstTotal)} de receitas do mês anterior ainda não lançadas ({receitasEst.itens.map(i => i.titulo).join(", ")}) (estimativa).
+            Inclui {hidden ? "•••" : fmtBRL(receitasEstTotal)} de receitas do mês anterior ainda não lançadas ({receitasEst.itens.map(i => i.titulo.toLowerCase().replace(/(^|\s)(\S)/g, (m, sp, ch) => sp + ch.toUpperCase())).join(" e ")}), como estimativa.
           </div>
         )}
         {fixosEst > 0 && (
@@ -3110,7 +3132,7 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
             <span style={{ fontWeight: 700, fontSize: 12.5, color: C.ink }}>Ritmo do mês</span>
             {ritmo.disponivel && (
-              <span style={{ fontSize: 12.5, fontWeight: 700, color: ritmo.pct > 150 ? C.coral : ritmo.pct > 100 ? C.amber : C.emerald }}>
+              <span style={{ fontSize: 12.5, fontWeight: 700, color: Math.round(ritmo.pct) > 150 ? C.coral : Math.round(ritmo.pct) > 100 ? C.amber : C.emerald }}>
                 {ritmo.pct.toFixed(0)}% do ritmo normal
               </span>
             )}
@@ -3121,7 +3143,7 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
                 Comparado ao que você normalmente já tinha pago até o dia {ritmo.diaRef}, nos últimos {ritmo.nMeses === 1 ? "mês" : `${ritmo.nMeses} meses`} — não à média do mês inteiro
               </div>
               <div style={{ position: "relative", height: 10, borderRadius: 5, background: C.border, margin: "6px 0 18px" }}>
-                <div style={{ height: "100%", width: `${Math.min(ritmo.pct, 200) / 2}%`, borderRadius: 5, background: ritmo.pct > 150 ? "linear-gradient(90deg,#FFB929,#FF5A68)" : ritmo.pct > 100 ? "linear-gradient(90deg,#FFC53D,#FFB929)" : "linear-gradient(90deg,#00E0A8,#22D3EE)" }} />
+                <div style={{ height: "100%", width: `${Math.min(ritmo.pct, 200) / 2}%`, borderRadius: 5, background: Math.round(ritmo.pct) > 150 ? "linear-gradient(90deg,#FFB929,#FF5A68)" : Math.round(ritmo.pct) > 100 ? "linear-gradient(90deg,#FFC53D,#FFB929)" : "linear-gradient(90deg,#00E0A8,#22D3EE)" }} />
                 <div style={{ position: "absolute", left: "50%", top: -4, bottom: -4, width: 2, borderRadius: 1, background: C.ink, opacity: 0.55 }} />
                 <span style={{ position: "absolute", left: "50%", top: 14, transform: "translateX(-50%)", fontSize: 10, color: C.faint }}>normal</span>
               </div>
@@ -3467,6 +3489,15 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
   const serie = useMemo(() => serieSaidas(custos, mesFiltro, fonteFiltro), [custos, mesFiltro, fonteFiltro]);
   const meiosCustos = useMemo(() => notasMeios(filtrados), [filtrados]);
   const proximo = useMemo(() => proximoVencimento(filtrados), [filtrados]);
+  // Maior custo do mês (fontes divididas somam pela descrição) — aparece na faixa do herói quando não há vencimento a mostrar.
+  const maiorCusto = useMemo(() => {
+    const m = new Map();
+    filtrados.forEach(c => { const k = c.descricao || "—"; m.set(k, (m.get(k) || 0) + Number(c.valorPago ?? c.valorPrevisto ?? 0)); });
+    let best = null;
+    m.forEach((v, k) => { if (!best || v > best.valor) best = { descricao: k, valor: v }; });
+    const total = [...m.values()].reduce((a, b) => a + b, 0);
+    return best && best.valor > 0 ? { ...best, pct: total > 0 ? Math.round((best.valor / total) * 100) : 0 } : null;
+  }, [filtrados]);
 
   function blankCusto(mes) {
     return { mes, ano: parseInt(mes.split("-")[0],10), descricao: "", vencimento: "", dataPagamento: "",
@@ -3670,6 +3701,31 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
         ]}
         pct={totals.totalPrevisto > 0 ? (totals.totalPago / totals.totalPrevisto) * 100 : 0}
         pctLabel={totals.totalPrevisto > 0 ? `${Math.round((totals.totalPago / totals.totalPrevisto) * 100)}% do previsto pago` : null}
+        faixa={proximo ? (
+          <button type="button" className="tap" onClick={() => openEdit(proximo.item.orig || proximo.item)}
+            style={{ width: "100%", display: "flex", alignItems: "center", gap: 10, textAlign: "left", fontFamily: "inherit", cursor: "pointer", padding: "8px 12px", borderRadius: 12, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.10)" }}>
+            <span style={{ width: 10, height: 10, borderRadius: 5, background: proximo.cor, boxShadow: `0 0 9px ${proximo.cor}`, flexShrink: 0 }} />
+            <span style={{ flex: 1, minWidth: 0 }}>
+              <span style={{ display: "block", fontSize: 10, fontWeight: 700, color: "#8B93B5", textTransform: "uppercase", letterSpacing: 0.5 }}>Próximo vencimento</span>
+              <span style={{ display: "block", fontSize: 13, fontWeight: 700, color: "#F3F5FA", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{proximo.item.descricao}{proximo.item.vencimento ? ` · ${fmtDate(proximo.item.vencimento)}` : ""}</span>
+            </span>
+            <span style={{ textAlign: "right", flexShrink: 0 }}>
+              <span style={{ display: "block", fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, fontWeight: 700, color: "#F3F5FA" }}>{fmtBRL(proximo.item.valorPrevisto)}</span>
+              <span style={{ display: "block", fontSize: 11, fontWeight: 700, color: proximo.cor }}>{proximo.texto}</span>
+            </span>
+          </button>
+        ) : maiorCusto ? (
+          <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", borderRadius: 12, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.10)" }}>
+            <span style={{ flex: 1, minWidth: 0 }}>
+              <span style={{ display: "block", fontSize: 10, fontWeight: 700, color: "#8B93B5", textTransform: "uppercase", letterSpacing: 0.5 }}>Maior custo do mês</span>
+              <span style={{ display: "block", fontSize: 13, fontWeight: 700, color: "#F3F5FA", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{maiorCusto.descricao}</span>
+            </span>
+            <span style={{ textAlign: "right", flexShrink: 0 }}>
+              <span style={{ display: "block", fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, fontWeight: 700, color: "#F3F5FA" }}>{fmtBRL(maiorCusto.valor)}</span>
+              <span style={{ display: "block", fontSize: 11, fontWeight: 700, color: "#8B93B5" }}>{maiorCusto.pct}% do mês</span>
+            </span>
+          </div>
+        ) : null}
         acao={{ label: "Novo", onClick: openNew }}
         onPrev={() => setMesFiltro(m => shiftMonth(m, -1))} onNext={() => setMesFiltro(m => shiftMonth(m, 1))}
         rodapeExtra={(
@@ -3696,8 +3752,6 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
         </Modal>
       )}
       {showSeletorMesC && <SeletorMes mes={mesFiltro} onPick={setMesFiltro} onClose={() => setShowSeletorMesC(false)} />}
-
-      {proximo && <ProximoVencLed info={proximo} onOpen={openEdit} />}
 
       {Object.keys(totals.porFonte).length > 0 && (
         <div className={serie.temDados ? "grid2c" : undefined} style={{ marginBottom: 20 }}>
@@ -3883,6 +3937,32 @@ function ReceitasTab({ receitas, onAdd, onRemove, onUpdate, inicioContagem, jump
   }, [rendas]);
   const meiosRec = useMemo(() => notasMeios(receitasComoCustos(rendas).filter(c => c.status === "Pago")), [rendas]);
 
+  // Receitas habituais: títulos que entraram no mês anterior e ainda não existem neste mês (só no mês corrente). Só sugerem: nada é gravado.
+  const esperadas = useMemo(() => {
+    if (mesFiltro !== currentMonth()) return [];
+    const tit = (r) => (r.descricao || "Outras").toUpperCase();
+    const jaTem = new Set(rendas.map(tit));
+    const ant = shiftMonth(mesFiltro, -1);
+    const grupos = new Map();
+    receitas.filter(r => r.mes === ant && !ehDeposito(r)).forEach(r => {
+      const t = tit(r);
+      if (jaTem.has(t)) return;
+      const g = grupos.get(t) || { titulo: t, descricao: r.descricao, valor: 0, categoria: r.categoria || "", conta: r.contaDestino || "", dia: 0 };
+      g.valor += Number(r.valorRecebido ?? r.valorPrevisto ?? 0);
+      const dd = Number(String(r.dataRecebimento || "").slice(8, 10)) || 0;
+      if (dd > g.dia) g.dia = dd;
+      grupos.set(t, g);
+    });
+    return [...grupos.values()].filter(g => g.valor > 0).sort((a, b) => b.valor - a.valor);
+  }, [receitas, rendas, mesFiltro]);
+  const abrirEsperada = (g) => {
+    destinoManual.current = true;
+    setEditingId(null);
+    const dia = Math.min(g.dia || 1, daysInMonthOf(mesFiltro));
+    setForm({ ...blankReceita(mesFiltro), descricao: g.descricao, categoria: g.categoria, contaDestino: g.conta || FONTES[1], valorPrevisto: fmtValorInput(g.valor), dataRecebimento: `${mesFiltro}-${String(dia).padStart(2, "0")}` });
+    setShowForm(true);
+  };
+
   function blankReceita(mes) {
     return { mes, ano: parseInt(mes.split("-")[0],10), descricao: "", dataRecebimento: "",
       valorPrevisto: "", valorRecebido: "", categoria: "", contaDestino: FONTES[1], status: "Pendente", obs: "" };
@@ -3997,6 +4077,17 @@ function ReceitasTab({ receitas, onAdd, onRemove, onUpdate, inicioContagem, jump
         ]}
         pct={totals.totalPrevisto > 0 ? (totals.totalRecebido / totals.totalPrevisto) * 100 : 0}
         pctLabel={totals.totalPrevisto > 0 ? `${Math.round((totals.totalRecebido / totals.totalPrevisto) * 100)}% do previsto recebido` : null}
+        faixa={esperadas.length > 0 ? (
+          <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+            <span style={{ fontSize: 11, fontWeight: 700, color: "#8B93B5", textTransform: "uppercase", letterSpacing: 0.5 }}>Esperadas</span>
+            {esperadas.map(g => (
+              <button key={g.titulo} type="button" className="tap" onClick={() => abrirEsperada(g)} title="Abrir formulário preenchido"
+                style={{ fontSize: 12, fontWeight: 700, padding: "4px 11px", borderRadius: 999, background: "rgba(255,197,61,0.1)", border: "1px solid rgba(255,197,61,0.4)", color: "#FFC53D", cursor: "pointer", fontFamily: "inherit" }}>
+                {g.titulo.toLowerCase().replace(/(^|\s)(\S)/g, (m, sp, ch) => sp + ch.toUpperCase())} · {fmtBRL(g.valor)} ›
+              </button>
+            ))}
+          </div>
+        ) : null}
         acao={{ label: "Nova", onClick: openNew }}
         onPrev={() => setMesFiltro(m => shiftMonth(m, -1))} onNext={() => setMesFiltro(m => shiftMonth(m, 1))} />
       {showSeletorMesR && <SeletorMes mes={mesFiltro} onPick={setMesFiltro} onClose={() => setShowSeletorMesR(false)} />}
@@ -4204,6 +4295,23 @@ function ResumoTab({ custos, receitas, inicioContagem, onChangeInicio }) {
         chips={[{ t: `Recebido ${fmtBRL(anual.recebido)}`, cor: "#4FE8BE" }, { t: `Pago ${fmtBRL(anual.pago)}`, cor: "#FF8A76" }, { t: `Previsto ${fmtBRL(anual.previsto)}` }]}
         pct={anual.previsto > 0 ? (anual.pago / anual.previsto) * 100 : null}
         pctLabel={anual.previsto > 0 ? `${Math.round((anual.pago / anual.previsto) * 100)}% do previsto pago` : null}
+        faixa={(
+          <div style={{ display: "flex", gap: 4 }} aria-label="Saldo de cada mês: verde positivo, coral negativo, esmaecido fora da contagem">
+            {rows.map((r, i) => {
+              const contado = i >= inicioIdx && r.temDados;
+              const cor = !contado ? "rgba(255,255,255,0.18)" : saldoCor(r.saldo) === C.coral ? "#FF8A76" : saldoCor(r.saldo) === C.emerald ? "#4FE8BE" : "#B8C2E8";
+              const atual = r.mesKey === currentMonth();
+              return (
+                <div key={r.mesKey || i} style={{ flex: 1, minWidth: 0, textAlign: "center", padding: "5px 0 6px", borderRadius: 9, background: atual ? "rgba(0,224,168,0.14)" : "rgba(255,255,255,0.04)", border: atual ? "1px solid rgba(0,224,168,0.5)" : "1px solid transparent" }}>
+                  <div style={{ fontSize: 9.5, fontWeight: 700, color: atual ? "#4FE8BE" : "#8B93B5", letterSpacing: 0.3 }}>{r.mesAbr}</div>
+                  <div style={{ height: 10, display: "flex", alignItems: "center", justifyContent: "center", marginTop: 3 }}>
+                    <span style={{ width: contado ? 14 : 8, height: contado ? 6 : 4, borderRadius: 3, background: cor, opacity: contado ? 1 : 0.7 }} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
         onPrev={() => setAno(a => a - 1)} onNext={() => setAno(a => a + 1)}
         prevOff={!anos.includes(ano - 1)} nextOff={!anos.includes(ano + 1)} />
 
@@ -4421,6 +4529,16 @@ function DemandasTab({ demandas, onAdd, onRemove, onUpdate, onStatusChange, jump
     // Tarefas paradas há 30+ dias não são "a mais urgente": prefere a atrasada mais antiga que ainda é recente, ou a próxima a vencer.
     return abertas.find(d => (diasAteVenc(d.prazo) ?? 0) > -PARADA_DIAS) || abertas[0] || null;
   }, [demandas]);
+  const reguaDias = useMemo(() => {
+    const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
+    const cont = {};
+    demandas.filter(d => d.status !== "Concluída" && d.prazo).forEach(d => { cont[d.prazo] = (cont[d.prazo] || 0) + 1; });
+    return Array.from({ length: 14 }, (_, i) => {
+      const dt = new Date(hoje); dt.setDate(hoje.getDate() + i);
+      const iso = localISO(dt);
+      return { iso, dow: "DSTQQSS"[dt.getDay()], dia: dt.getDate(), n: cont[iso] || 0, hoje: i === 0 };
+    });
+  }, [demandas]);
   const [showAdiar, setShowAdiar] = useState(false);
   const [novoPrazo, setNovoPrazo] = useState("");
   const [adiarSel, setAdiarSel] = useState([]);
@@ -4450,6 +4568,7 @@ function DemandasTab({ demandas, onAdd, onRemove, onUpdate, onStatusChange, jump
         ]}
         pct={totalDemandas > 0 ? pctConcluido : null}
         pctLabel={totalDemandas > 0 ? `${pctConcluido.toFixed(0)}% concluído` : null}
+        faixa={<ReguaDias dias={reguaDias} />}
         rodapeTexto={maisUrgenteDem ? `Mais urgente: ${maisUrgenteDem.nome} · ${String(maisUrgenteDem.prazo).slice(0, 4) === String(new Date().getFullYear()) ? fmtDate(maisUrgenteDem.prazo).slice(0, 5) : fmtDate(maisUrgenteDem.prazo)}` : "Nenhum prazo em aberto"}
         rodapeCor={maisUrgenteDem && (diasAteVenc(maisUrgenteDem.prazo) ?? 0) < 0 ? "#FF8A76" : "#B8C2E8"}
         acao={{ label: "Nova", onClick: openNew }} />
