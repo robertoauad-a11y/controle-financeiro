@@ -2514,7 +2514,7 @@ function TabHero({ titulo, mesLabel, onLabelClick, destaque, pct = null, pctLabe
   const chipSt = (cor, clicavel) => ({ fontSize: 12, fontWeight: 700, padding: "4px 11px", borderRadius: 999, background: "rgba(255,255,255,0.07)", border: "1px solid rgba(255,255,255,0.12)", color: cor || "#D5DBF5", cursor: clicavel ? "pointer" : "default", fontFamily: "inherit" });
   return (
     <div className="in" style={{
-      position: "relative", display: "flex", flexDirection: "column", minHeight: 340, borderRadius: 24, padding: "20px 22px", marginBottom: 20, border: "3px solid transparent",
+      position: "relative", display: "flex", flexDirection: "column", minHeight: 356, borderRadius: 24, padding: "20px 22px", marginBottom: 20, border: "3px solid transparent",
       background: "linear-gradient(150deg, #0B0F1F 0%, #101632 60%, #0F3D33 100%) padding-box, linear-gradient(135deg, #00E0A8, #9AA5D1) border-box",
       boxShadow: "0 14px 34px rgba(11,15,31,0.28), 0 4px 12px rgba(11,15,31,0.18)"
     }}>
@@ -2874,9 +2874,13 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
   // Fixos ainda não lançados neste mês entram na projeção como ESTIMATIVA (usa o valor pago esperado, se houver).
   // Fixos sem valor (ex.: Unimed, Gibson) ficam de fora e são avisados.
   const fixosFaltam = useMemo(() => ehMesCorrente ? fixosPendentes(fixos, custos, mesAtual).faltam : [], [fixos, custos, mesAtual, ehMesCorrente]);
-  const valorFixo = (f) => Number(f.valorPago || f.valor || 0);
+  // Sem valor cadastrado, a estimativa usa o lançamento do mês anterior com o mesmo nome (é o mesmo valor que o "Lançar" sugere).
+  const valorAnteriorFixo = (f) => { const a = custos.find(c => c.mes === mesAnterior && normDesc(c.descricao) === normDesc(f.descricao)); return a ? Number(a.valorPrevisto || a.valorPago || 0) : 0; };
+  const valorFixoCad = (f) => Number(f.valorPago || f.valor || 0);
+  const valorFixo = (f) => valorFixoCad(f) > 0 ? valorFixoCad(f) : valorAnteriorFixo(f);
   const fixosEst = fixosFaltam.reduce((t, f) => t + valorFixo(f), 0);
   const fixosSemValor = fixosFaltam.filter(f => !(valorFixo(f) > 0));
+  const fixosPeloAnterior = fixosFaltam.filter(f => !(valorFixoCad(f) > 0) && valorAnteriorFixo(f) > 0);
   // Receitas habituais (mesmo título do mês anterior) ainda não lançadas neste mês entram como ESTIMATIVA de entrada.
   const receitasEst = useMemo(() => {
     if (!ehMesCorrente) return { total: 0, itens: [] };
@@ -3125,6 +3129,7 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
         {fixosEst > 0 && (
           <div style={{ fontSize: 11.5, color: C.faint, marginTop: 10, lineHeight: 1.45 }}>
             Inclui {hidden ? "•••" : fmtBRL(fixosEst)} de {fixosFaltam.length - fixosSemValor.length} {fixosFaltam.length - fixosSemValor.length === 1 ? "fixo ainda não lançado" : "fixos ainda não lançados"} (estimativa).
+            {fixosPeloAnterior.length > 0 && <> {fixosPeloAnterior.map(f => f.descricao).join(" e ")} {fixosPeloAnterior.length === 1 ? "entra" : "entram"} pelo valor do mês anterior.</>}
             {fixosSemValor.length > 0 && <> {fixosSemValor.map(f => f.descricao).join(" e ")} {fixosSemValor.length === 1 ? "não tem" : "não têm"} valor cadastrado e {fixosSemValor.length === 1 ? "fica" : "ficam"} de fora.</>}
           </div>
         )}
