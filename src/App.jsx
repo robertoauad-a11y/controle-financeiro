@@ -1173,7 +1173,8 @@ export default function App() {
   const data = useMemo(() => ({ custos, receitas, demandas }), [custos, receitas, demandas]);
   const central = useCentralAvisos(custos, demandas, fixos, 14);
   const nAtrasadosApp = central.nUrgentes;
-  const [pedirAtencao, setPedirAtencao] = useState(false);
+  // Central de avisos: abre por cima da aba atual (sino do topo) ou a partir do Início. null = fechada; { hidden } = valores ocultos?
+  const [centralAberta, setCentralAberta] = useState(null);
   const receitasRenda = useMemo(() => receitas.filter(r => !ehDeposito(r)), [receitas]);
   const depositosRec = useMemo(() => receitas.filter(ehDeposito), [receitas]);
 
@@ -1363,7 +1364,7 @@ export default function App() {
     return (
           <div style={{ position: "relative", display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
             {claro && (
-              <button className="tap" onClick={() => { setTab("dashboard"); setPedirAtencao(true); }} aria-label={nAtrasadosApp > 0 ? `Central de avisos: ${nAtrasadosApp} precisam de atenção` : "Central de avisos: tudo em dia"}
+              <button className="tap" onClick={() => setCentralAberta({ hidden: false })} aria-label={nAtrasadosApp > 0 ? `Central de avisos: ${nAtrasadosApp} precisam de atenção` : "Central de avisos: tudo em dia"}
                 style={{ position: "relative", width: 38, height: 38, borderRadius: 12, border: `1px solid ${corBorda}`, background: corFundo, color: nAtrasadosApp > 0 ? C.coral : corIcone, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
                 <Bell size={16} />
                 {nAtrasadosApp > 0 && <span style={{ position: "absolute", top: -5, right: -5, minWidth: 17, height: 17, borderRadius: 9, background: C.coral, color: "#fff", fontSize: 10, fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 4px", boxSizing: "border-box" }}>{nAtrasadosApp > 99 ? "99+" : nAtrasadosApp}</span>}
@@ -1485,8 +1486,13 @@ export default function App() {
       </div>
       )}
 
+      {centralAberta && (
+        <CentralAvisosModal central={central} hidden={centralAberta.hidden} onClose={() => setCentralAberta(null)}
+          onNavigate={goToItem} onConcluirDemanda={(id) => updateDemandaStatus(id, "Concluída")} />
+      )}
+
       <main style={{ maxWidth: 1080, margin: "0 auto", padding: "20px 20px 0" }}>
-        {tab === "dashboard" && <DashboardTab custos={data.custos} receitas={receitasRenda} depositos={depositosRec} demandas={data.demandas} onNavigate={goToItem} onConcluirDemanda={(id) => updateDemandaStatus(id, "Concluída")} inicioContagem={inicioContagem} fixos={fixos} topo={topoApp} pedirAtencao={pedirAtencao} onConsumePedido={() => setPedirAtencao(false)} central={central} />}
+        {tab === "dashboard" && <DashboardTab custos={data.custos} receitas={receitasRenda} depositos={depositosRec} demandas={data.demandas} onNavigate={goToItem} onConcluirDemanda={(id) => updateDemandaStatus(id, "Concluída")} inicioContagem={inicioContagem} fixos={fixos} topo={topoApp} onAbrirCentral={(h) => setCentralAberta({ hidden: !!h })} central={central} />}
         {tab === "custos" && <CustosTab fixos={fixos} fixosErro={fixosErro} onAddFixo={addFixo} onUpdateFixo={updateFixo} onRemoveFixo={removeFixo} custos={data.custos} onAdd={addCusto} onRemove={removeCusto} onUpdate={updateCusto} jumpTarget={jumpTarget && jumpTarget.tab === "custos" ? jumpTarget : null} onConsumeJump={() => setJumpTarget(null)} />}
         {tab === "receitas" && <ReceitasTab receitas={data.receitas} onAdd={addReceita} onRemove={removeReceita} onUpdate={updateReceita} inicioContagem={inicioContagem} jumpTarget={jumpTarget && jumpTarget.tab === "receitas" ? jumpTarget : null} onConsumeJump={() => setJumpTarget(null)} />}
         {tab === "resumo" && <ResumoTab custos={data.custos} receitas={receitasRenda} inicioContagem={inicioContagem} onChangeInicio={mudarInicioContagem} />}
@@ -2501,7 +2507,7 @@ function TilesAnalise({ itens, hidden }) {
         <div key={t.rotulo} style={{ background: C.card, boxShadow: shadowSm, borderRadius: 16, padding: "14px 16px", minWidth: 0 }}>
           <div style={{ fontSize: 10.5, fontWeight: 700, color: C.muted, textTransform: "uppercase", letterSpacing: 0.5 }}>{t.rotulo}</div>
           <div style={{ fontFamily: "'Fraunces', serif", fontWeight: 700, fontSize: 22, letterSpacing: -0.4, color: t.cor || C.ink, marginTop: 6, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>{hidden && t.mask ? "•••" : tituloBonito(t.valor)}</div>
-          {t.sub && <div style={{ fontSize: 11, color: C.faint, marginTop: 3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{hidden && t.mask ? "•••" : t.sub}</div>}
+          {t.sub && <div style={{ fontSize: 11, color: C.faint, marginTop: 3, lineHeight: 1.4, whiteSpace: "pre-line", overflowWrap: "anywhere" }}>{hidden && t.mask ? "•••" : t.sub}</div>}
         </div>
       ))}
     </div>
@@ -2678,14 +2684,79 @@ function ProximosDiasCard({ itens, onOpenItem, onAcao, hidden, central = false, 
   );
 }
 
-function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, onConcluirDemanda, inicioContagem, fixos = [], topo = null, pedirAtencao = false, onConsumePedido, central = { itens: [], parados: [], nUrgentes: 0 } }) {
+// Central de avisos: atrasados e o que vence nos próximos 14 dias (+ tarefas paradas há muito tempo, recolhidas).
+// Fica no nível do App para abrir por cima de qualquer aba, sem trocar de aba.
+function CentralAvisosModal({ central, hidden = false, onClose, onNavigate, onConcluirDemanda }) {
+  const [paradosAberto, setParadosAberto] = useState(false);
+  return (
+    <Modal title="Central de avisos" onClose={onClose}>
+      <div style={{ fontSize: 11.5, color: C.faint, marginBottom: 10 }}>Atrasados e tudo o que vence nos próximos 14 dias.</div>
+      <ProximosDiasCard central itens={central.itens} hidden={hidden}
+        vazioTexto={central.parados && central.parados.length > 0 ? "Nada urgente nem agendado pelos próximos 14 dias ✓" : null}
+        onAcao={async (it) => {
+          if (it.tipo === "Fixo") { onClose(); onNavigate && onNavigate("custos", null, { lancarFixo: it.label, mes: currentMonth() }); }
+          else if (it.tipo === "Custo") { onClose(); onNavigate && onNavigate("custos", it.rawId, { pagar: true }); }
+          else if (onConcluirDemanda && await confirmar(`Marcar "${it.label}" como Concluída?`, { okLabel: "Concluir" })) onConcluirDemanda(it.rawId);
+        }}
+        onOpenItem={(it) => { onClose(); it.fixo ? (onNavigate && onNavigate("custos", null, { abrirFixos: true })) : (onNavigate && onNavigate(it.tab, it.rawId)); }} />
+      {central.parados && central.parados.length > 0 && (
+        <div style={{ marginTop: central.itens.length ? 18 : 12, paddingTop: 12, borderTop: central.itens.length ? `1px solid ${C.border}` : "none" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <button type="button" className="tap" onClick={() => setParadosAberto(a => !a)} aria-expanded={paradosAberto}
+              style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: 8, border: "none", background: "transparent", color: C.ink, cursor: "pointer", fontFamily: "inherit", padding: "4px 0", textAlign: "left" }}>
+              <span style={{ fontWeight: 700, fontSize: 12.5, textTransform: "uppercase", letterSpacing: 0.4 }}>Paradas há mais de {PARADA_DIAS} dias</span>
+              <span style={{ fontSize: 11, fontWeight: 700, color: C.muted, background: C.border, borderRadius: 10, padding: "1px 8px" }}>{central.parados.length}</span>
+              <ChevronDown size={18} color={C.muted} style={{ marginLeft: "auto", transform: paradosAberto ? "rotate(180deg)" : "none", transition: "transform .2s ease" }} />
+            </button>
+          </div>
+          <div style={{ fontSize: 11.5, color: C.faint, margin: "2px 0 6px" }}>Não entram na contagem de avisos. Conclua, adie ou apague quando puder.</div>
+          {paradosAberto && <>
+            <ProximosDiasCard central grupoUnico="Paradas" itens={central.parados} hidden={hidden}
+              onAcao={async (it) => { if (onConcluirDemanda && await confirmar(`Marcar "${it.label}" como Concluída?`, { okLabel: "Concluir" })) onConcluirDemanda(it.rawId); }}
+              onOpenItem={(it) => { onClose(); onNavigate && onNavigate(it.tab, it.rawId); }} />
+            <button type="button" className="tap" onClick={() => { onClose(); onNavigate && onNavigate("demandas", null, { adiarParadas: true }); }}
+              style={{ marginTop: 10, height: 34, borderRadius: 17, border: `1px solid ${C.border}`, background: "transparent", color: C.inkSoft, cursor: "pointer", fontSize: 12, fontWeight: 700, padding: "0 14px", fontFamily: "inherit" }}>
+              Adiar todas de uma vez…
+            </button>
+          </>}
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+// Blocos do modal "Observações" da Projeção de fechamento.
+function ObsBloco({ titulo, total = null, hidden = false, nota = null, acao = null, children }) {
+  return (
+    <div style={{ marginBottom: 18 }}>
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10, marginBottom: 2 }}>
+        <span style={{ fontWeight: 700, fontSize: 12.5, color: C.ink, textTransform: "uppercase", letterSpacing: 0.4 }}>{titulo}</span>
+        {total !== null && <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 700, fontSize: 13, color: C.ink }}>{hidden ? "R$ •••••" : fmtBRL(total)}</span>}
+      </div>
+      {nota && <div style={{ fontSize: 11.5, color: C.faint, lineHeight: 1.45, marginBottom: 6 }}>{nota}</div>}
+      <div>{children}</div>
+      {acao}
+    </div>
+  );
+}
+function ObsLinha({ nome, detalhe = null, valor = null, hidden = false }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "8px 0", borderTop: `1px solid ${C.border}` }}>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontSize: 13.5, fontWeight: 600, color: C.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{nome}</div>
+        {detalhe && <div style={{ fontSize: 11.5, color: C.faint }}>{detalhe}</div>}
+      </div>
+      {valor !== null && <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, color: C.inkSoft, flexShrink: 0 }}>{hidden ? "R$ •••••" : fmtBRL(valor)}</span>}
+    </div>
+  );
+}
+
+function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, onConcluirDemanda, inicioContagem, fixos = [], topo = null, onAbrirCentral, central = { itens: [], parados: [], nUrgentes: 0 } }) {
   const [hidden, setHidden] = useState(false);
   const [saldoAberto, setSaldoAberto] = useState(false);
   const [analise, setAnalise] = useState("evolucao");
-  const [atencaoAberta, setAtencaoAberta] = useState(false);
-  useEffect(() => { if (pedirAtencao) { setAtencaoAberta(true); onConsumePedido && onConsumePedido(); } }, [pedirAtencao]);
+  const [obsAberto, setObsAberto] = useState(false);
   const [pulsarAtencao, setPulsarAtencao] = useState(false);
-  const [paradosAberto, setParadosAberto] = useState(false);
   const qtdAtencaoAnt = useRef(null);
   // Mês exibido nos cartões do Início (padrão: o mês corrente). "Precisa de atenção" e "Agenda" continuam sendo de hoje.
   // null = acompanha o mês corrente (se o app ficar aberto na virada do mês, ele muda sozinho).
@@ -2902,6 +2973,8 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
   const projMax = Math.max(1, projecao.recebido + projecao.aReceber + receitasEstTotal, projecao.pago + projecao.aPagar + fixosEst);
   const projQuitado = projecao.aPagar === 0 && fixosEst === 0 && receitasEstTotal === 0 && projecao.aReceber === 0 && (projecao.pago + projecao.recebido) > 0;
   const projEstimada = fixosEst > 0 || receitasEstTotal > 0;
+  // Notas da projeção (abrem no modal "Observações"): receitas esperadas, fixos estimados e fixos sem valor.
+  const nObs = [receitasEstTotal > 0, fixosEst > 0, fixosSemValor.length > 0].filter(Boolean).length;
   const projTemDados = (projecao.pago + projecao.recebido + projecao.aPagar + projecao.aReceber + fixosEst + receitasEstTotal) > 0;
 
   // "Próximos dias": fixos a lançar + custos e tarefas que vêm pela frente, tudo em ordem de data.
@@ -2997,7 +3070,7 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
     if (analise === "custos") {
       const top = topCustos[0];
       return [
-        { rotulo: "Falta pagar", valor: fmtBRL(projecao.aPagar), sub: projecao.aPagar > 0 ? "ainda previsto" : "tudo pago", cor: projecao.aPagar > 0 ? C.amber : C.emerald, mask: true },
+        { rotulo: "Falta pagar", valor: fmtBRL(projecao.aPagar), sub: `${projecao.aPagar > 0 ? "ainda previsto" : "tudo pago"}${fixosFaltam.length > 0 ? ` · ${fixosFaltam.length} ${fixosFaltam.length === 1 ? "fixo" : "fixos"} a lançar` : ""}`, cor: projecao.aPagar > 0 ? C.amber : C.emerald, mask: true },
         ...(top ? [{ rotulo: "Maior custo", valor: top.descricao, sub: `${fmtBRL(top.valor)}${kpis.totalPago > 0 ? ` · ${((top.valor / kpis.totalPago) * 100).toFixed(0)}% do pago` : ""}`, mask: true }] : []),
         ...(porFonte[0] ? [{ rotulo: "Fonte principal", valor: porFonte[0].name, sub: `${pctDe(porFonte[0].value, porFonte)} dos custos` }] : [])
       ];
@@ -3005,46 +3078,44 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
     const abaixo = Math.max(0, projecao.previstoRec - projecao.recebido - projecao.aReceber);
     return [
       { rotulo: "Previsto no mês", valor: fmtBRL(projecao.previstoRec), sub: `${fmtBRL(kpis.totalRecebido)} já recebidos`, mask: true },
-      { rotulo: "Falta entrar", valor: fmtBRL(projecao.aReceber), sub: projecao.aReceber > 0 ? "ainda previsto" : abaixo > 0.005 ? `recebido ${fmtBRL(abaixo)} abaixo do previsto` : "tudo recebido", mask: true },
+      { rotulo: "Falta entrar", valor: fmtBRL(projecao.aReceber), sub: `${projecao.aReceber > 0 ? "ainda previsto" : abaixo > 0.005 ? `recebido ${fmtBRL(abaixo)} abaixo do previsto` : "tudo recebido"}${receitasEstTotal > 0 ? `\n+ ${fmtBRL(receitasEstTotal)} esperadas a lançar` : ""}`, mask: true },
       ...(porCategoria[0] ? [{ rotulo: "Maior receita", valor: porCategoria[0].name, sub: `${fmtBRL(porCategoria[0].value)} · ${pctDe(porCategoria[0].value, porCategoria)}`, mask: true }] : [])
     ];
   })();
 
   return (
     <div>
-      {atencaoAberta && (
-        <Modal title="Central de avisos" onClose={() => setAtencaoAberta(false)}>
-          <div style={{ fontSize: 11.5, color: C.faint, marginBottom: 10 }}>Atrasados e tudo o que vence nos próximos 14 dias.</div>
-          <ProximosDiasCard central itens={central.itens} hidden={hidden}
-            vazioTexto={central.parados && central.parados.length > 0 ? "Nada urgente nem agendado pelos próximos 14 dias ✓" : null}
-            onAcao={async (it) => {
-              if (it.tipo === "Fixo") { setAtencaoAberta(false); onNavigate && onNavigate("custos", null, { lancarFixo: it.label, mes: currentMonth() }); }
-              else if (it.tipo === "Custo") { setAtencaoAberta(false); onNavigate && onNavigate("custos", it.rawId, { pagar: true }); }
-              else if (onConcluirDemanda && await confirmar(`Marcar "${it.label}" como Concluída?`, { okLabel: "Concluir" })) onConcluirDemanda(it.rawId);
-            }}
-            onOpenItem={(it) => { setAtencaoAberta(false); it.fixo ? (onNavigate && onNavigate("custos", null, { abrirFixos: true })) : (onNavigate && onNavigate(it.tab, it.rawId)); }} />
-          {central.parados && central.parados.length > 0 && (
-            <div style={{ marginTop: central.itens.length ? 18 : 12, paddingTop: 12, borderTop: central.itens.length ? `1px solid ${C.border}` : "none" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <button type="button" className="tap" onClick={() => setParadosAberto(a => !a)} aria-expanded={paradosAberto}
-                  style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: 8, border: "none", background: "transparent", color: C.ink, cursor: "pointer", fontFamily: "inherit", padding: "4px 0", textAlign: "left" }}>
-                  <span style={{ fontWeight: 700, fontSize: 12.5, textTransform: "uppercase", letterSpacing: 0.4 }}>Paradas há mais de {PARADA_DIAS} dias</span>
-                  <span style={{ fontSize: 11, fontWeight: 700, color: C.muted, background: C.border, borderRadius: 10, padding: "1px 8px" }}>{central.parados.length}</span>
-                  <ChevronDown size={18} color={C.muted} style={{ marginLeft: "auto", transform: paradosAberto ? "rotate(180deg)" : "none", transition: "transform .2s ease" }} />
-                </button>
-              </div>
-              <div style={{ fontSize: 11.5, color: C.faint, margin: "2px 0 6px" }}>Não entram na contagem de avisos. Conclua, adie ou apague quando puder.</div>
-              {paradosAberto && <>
-                <ProximosDiasCard central grupoUnico="Paradas" itens={central.parados} hidden={hidden}
-                  onAcao={async (it) => { if (onConcluirDemanda && await confirmar(`Marcar "${it.label}" como Concluída?`, { okLabel: "Concluir" })) onConcluirDemanda(it.rawId); }}
-                  onOpenItem={(it) => { setAtencaoAberta(false); onNavigate && onNavigate(it.tab, it.rawId); }} />
-                <button type="button" className="tap" onClick={() => { setAtencaoAberta(false); onNavigate && onNavigate("demandas", null, { adiarParadas: true }); }}
-                  style={{ marginTop: 10, height: 34, borderRadius: 17, border: `1px solid ${C.border}`, background: "transparent", color: C.inkSoft, cursor: "pointer", fontSize: 12, fontWeight: 700, padding: "0 14px", fontFamily: "inherit" }}>
-                  Adiar todas de uma vez…
-                </button>
-              </>}
-            </div>
+      {obsAberto && (
+        <Modal title="Observações da projeção" onClose={() => setObsAberto(false)}>
+          <div style={{ fontSize: 11.5, color: C.faint, marginBottom: 14, lineHeight: 1.45 }}>O que entrou como estimativa no saldo de {mesLabel}, além do que já está lançado. Ao lançar cada item, ele deixa de ser estimativa e passa a contar como previsto ou pago.</div>
+          {receitasEstTotal > 0 && (
+            <ObsBloco titulo="Receitas esperadas" total={receitasEstTotal} hidden={hidden} nota="Receitas do mês anterior que ainda não foram lançadas neste mês, contadas como entrada.">
+              {receitasEst.itens.map(i => (
+                <ObsLinha key={i.titulo} hidden={hidden} nome={i.titulo.toLowerCase().replace(/(^|\s)(\S)/g, (m, sp, ch) => sp + ch.toUpperCase())} detalhe="valor do mês anterior" valor={i.valor} />
+              ))}
+            </ObsBloco>
           )}
+          {fixosEst > 0 && (
+            <ObsBloco titulo="Fixos ainda não lançados" total={fixosEst} hidden={hidden} nota="Entram como saída pelo valor cadastrado no fixo ou, sem ele, pelo lançamento do mês anterior.">
+              {fixosFaltam.filter(f => valorFixo(f) > 0).map(f => (
+                <ObsLinha key={f.id || f.descricao} hidden={hidden} nome={f.descricao} detalhe={`${f.dia ? `dia ${f.dia} · ` : ""}${valorFixoCad(f) > 0 ? "valor cadastrado" : "pelo valor do mês anterior"}`} valor={valorFixo(f)} />
+              ))}
+            </ObsBloco>
+          )}
+          {fixosSemValor.length > 0 && (
+            <ObsBloco titulo="Fora da estimativa" nota="Sem valor cadastrado e sem lançamento no mês anterior, esses fixos não pesam nos números. Cadastre o valor no fixo para eles entrarem."
+              acao={(
+                <button type="button" className="tap" onClick={() => { setObsAberto(false); onNavigate && onNavigate("custos", null, { abrirFixos: true }); }}
+                  style={{ marginTop: 10, height: 34, borderRadius: 17, border: `1px solid ${C.border}`, background: "transparent", color: C.inkSoft, cursor: "pointer", fontSize: 12, fontWeight: 700, padding: "0 14px", fontFamily: "inherit" }}>
+                  Cadastrar valor nos Fixos ›
+                </button>
+              )}>
+              {fixosSemValor.map(f => (
+                <ObsLinha key={f.id || f.descricao} nome={f.descricao} detalhe={`${f.dia ? `dia ${f.dia} · ` : ""}sem valor cadastrado`} />
+              ))}
+            </ObsBloco>
+          )}
+          <div style={{ height: 8 }} />
         </Modal>
       )}
 
@@ -3067,7 +3138,7 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
         onVerAnterior={() => escolherMes(mesAnterior)}
         topo={topo}
         curva={curva}
-        atencao={{ n: central.nUrgentes, parados: (central.parados || []).length, onOpen: () => setAtencaoAberta(true), pulsar: pulsarAtencao }}
+        atencao={{ n: central.nUrgentes, parados: (central.parados || []).length, onOpen: () => onAbrirCentral && onAbrirCentral(hidden), pulsar: pulsarAtencao }}
         situacao={!ehMesCorrente ? [] : [
           ...(ritmo.disponivel ? [{ t: `Ritmo ${ritmo.pct.toFixed(0)}% do normal`, cor: Math.round(ritmo.pct) > 150 ? "#FF8A76" : Math.round(ritmo.pct) > 100 ? "#FFC53D" : "#4FE8BE" }] : []),
           ...(fixosEst > 0 ? [{ t: `Faltam ${fmtBRL(fixosEst)} em fixos ›`, cor: "#B8BFDB", onClick: () => onNavigate && onNavigate("custos", null, { abrirFixos: true }) }] : []),
@@ -3117,22 +3188,20 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
           <ProjBar label="Entradas" done={projecao.recebido} pending={projecao.aReceber + receitasEstTotal} color={C.emerald} max={projMax} hidden={hidden} />
           <ProjBar label="Saídas" done={projecao.pago} pending={projecao.aPagar + fixosEst} color={C.coral} max={projMax} hidden={hidden} />
         </div>
-        {!projQuitado && <div style={{ display: "flex", gap: 16, marginTop: 12, fontSize: 11, color: C.faint, flexWrap: "wrap" }}>
-          <span style={{ display: "flex", alignItems: "center", gap: 6 }}><span style={{ width: 10, height: 10, borderRadius: 3, background: C.muted }} />já realizado</span>
-          <span style={{ display: "flex", alignItems: "center", gap: 6 }}><span style={{ width: 10, height: 10, borderRadius: 3, background: `repeating-linear-gradient(135deg, ${C.muted}88 0 3px, ${C.muted}33 3px 6px)` }} />ainda previsto</span>
-        </div>}
-        {receitasEstTotal > 0 && (
-          <div style={{ fontSize: 11.5, color: C.faint, marginTop: 10, lineHeight: 1.45 }}>
-            Inclui {hidden ? "•••" : fmtBRL(receitasEstTotal)} de receitas do mês anterior ainda não lançadas ({receitasEst.itens.map(i => i.titulo.toLowerCase().replace(/(^|\s)(\S)/g, (m, sp, ch) => sp + ch.toUpperCase())).join(" e ")}), como estimativa.
-          </div>
-        )}
-        {fixosEst > 0 && (
-          <div style={{ fontSize: 11.5, color: C.faint, marginTop: 10, lineHeight: 1.45 }}>
-            Inclui {hidden ? "•••" : fmtBRL(fixosEst)} de {fixosFaltam.length - fixosSemValor.length} {fixosFaltam.length - fixosSemValor.length === 1 ? "fixo ainda não lançado" : "fixos ainda não lançados"} (estimativa).
-            {fixosPeloAnterior.length > 0 && <> {fixosPeloAnterior.map(f => f.descricao).join(" e ")} {fixosPeloAnterior.length === 1 ? "entra" : "entram"} pelo valor do mês anterior.</>}
-            {fixosSemValor.length > 0 && <> {fixosSemValor.map(f => f.descricao).join(" e ")} {fixosSemValor.length === 1 ? "não tem" : "não têm"} valor cadastrado e {fixosSemValor.length === 1 ? "fica" : "ficam"} de fora.</>}
-          </div>
-        )}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginTop: 12 }}>
+          {!projQuitado ? (
+            <div style={{ display: "flex", gap: 16, fontSize: 11, color: C.faint, flexWrap: "wrap" }}>
+              <span style={{ display: "flex", alignItems: "center", gap: 6 }}><span style={{ width: 10, height: 10, borderRadius: 3, background: C.muted }} />já realizado</span>
+              <span style={{ display: "flex", alignItems: "center", gap: 6 }}><span style={{ width: 10, height: 10, borderRadius: 3, background: `repeating-linear-gradient(135deg, ${C.muted}88 0 3px, ${C.muted}33 3px 6px)` }} />ainda previsto</span>
+            </div>
+          ) : <span />}
+          {nObs > 0 && (
+            <button type="button" className="tap" onClick={() => setObsAberto(true)} aria-label={`Observações sobre a projeção (${nObs})`}
+              style={{ marginLeft: "auto", border: "none", background: "transparent", color: C.inkSoft, cursor: "pointer", fontFamily: "inherit", fontSize: 11, fontWeight: 800, letterSpacing: 0.6, textTransform: "uppercase", padding: "4px 0" }}>
+              Observações ({nObs}) ›
+            </button>
+          )}
+        </div>
         <div style={{ marginTop: 18 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
             <span style={{ fontWeight: 700, fontSize: 12.5, color: C.ink }}>Ritmo do mês</span>
@@ -4290,6 +4359,7 @@ function ResumoTab({ custos, receitas, inicioContagem, onChangeInicio }) {
     mes: r.mesAbr, Saldo: r.saldo, contado: i >= inicioIdx, temDados: r.temDados,
     Plot: Math.max(domMin, Math.min(domMax, r.saldo))
   }));
+  const temCortada = chartData.some(d => !d.contado && d.temDados && d.Plot !== d.Saldo);
   const vazios = rows.filter(r => !r.temDados && r.mesKey !== currentMonth());
   const nCards = rows.filter(r => r.temDados || r.mesKey === currentMonth()).length;
 
@@ -4326,7 +4396,7 @@ function ResumoTab({ custos, receitas, inicioContagem, onChangeInicio }) {
           onChange={e => { const idx = MESES.indexOf(e.target.value); onChangeInicio && onChangeInicio(`${ano}-${String(Math.max(0, idx) + 1).padStart(2, "0")}`); }}
           style={{ maxWidth: 150 }} />
         {inicioIdx > 0 && (
-          <span style={{ fontSize: 11.5, color: C.pageFaint }}>Meses anteriores aparecem esmaecidos e ficam fora dos totais.</span>
+          <span style={{ fontSize: 11.5, color: C.pageFaint }}>Meses anteriores aparecem esmaecidos e ficam fora dos totais{temCortada ? "; o ≈ marca barras cortadas na escala" : ""}.</span>
         )}
       </div>
 
@@ -4343,9 +4413,11 @@ function ResumoTab({ custos, receitas, inicioContagem, onChangeInicio }) {
                 {chartData.map((d, i) => <Cell key={i} fill={saldoCor(d.Saldo)} fillOpacity={d.contado ? 1 : 0.3} />)}
                 <LabelList dataKey="Plot" content={(pr) => {
                   const d = chartData[pr.index];
-                  if (!d || !d.contado || !d.temDados) return null;
+                  if (!d || !d.temDados) return null;
                   const topo = Math.min(pr.y, pr.y + pr.height), fundo = Math.max(pr.y, pr.y + pr.height);
                   const neg = d.Saldo < 0;
+                  // Mês fora da contagem com barra cortada na escala: só uma marca "≈" dentro da barra (o valor real está no cartão e no tooltip).
+                  if (!d.contado) return d.Plot !== d.Saldo ? <text x={pr.x + pr.width / 2} y={neg ? fundo - 6 : topo + 14} textAnchor="middle" fontSize={13} fontWeight={700} fill={C.muted}>≈</text> : null;
                   const v = Math.round(Math.abs(d.Saldo));
                   const txt = `${neg ? "−" : "+"}${v.toLocaleString("pt-BR")}`;
                   return <text x={pr.x + pr.width / 2} y={neg ? fundo + 12 : topo - 5} textAnchor="middle" fontSize={10.5} fontWeight={700} fill={saldoCor(d.Saldo)}>{txt}</text>;
