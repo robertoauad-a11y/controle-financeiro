@@ -1171,7 +1171,29 @@ export default function App() {
 
   const loading = !(loadedFlags.custos && loadedFlags.receitas && loadedFlags.demandas);
   const data = useMemo(() => ({ custos, receitas, demandas }), [custos, receitas, demandas]);
-  const central = useCentralAvisos(custos, demandas, fixos, 14);
+  // Dia de hoje: se o app passa a noite aberto (ou volta do segundo plano), tudo o que depende da data é recalculado.
+  // Com uma janela aberta (formulário), a troca espera para não perder o que está sendo digitado.
+  const [diaHoje, setDiaHoje] = useState(localISO);
+  const [, setHoraHoje] = useState(() => new Date().getHours());
+  useEffect(() => {
+    const sync = () => {
+      if (document.body && document.body.classList.contains("modal-aberto")) return;
+      const agora = localISO();
+      setDiaHoje(prev => (prev === agora ? prev : agora));
+      setHoraHoje(new Date().getHours());
+    };
+    const t = setInterval(sync, 60000);
+    document.addEventListener("visibilitychange", sync);
+    window.addEventListener("focus", sync);
+    window.addEventListener("pageshow", sync);
+    return () => {
+      clearInterval(t);
+      document.removeEventListener("visibilitychange", sync);
+      window.removeEventListener("focus", sync);
+      window.removeEventListener("pageshow", sync);
+    };
+  }, []);
+  const central = useCentralAvisos(custos, demandas, fixos, 14, diaHoje);
   const nAtrasadosApp = central.nUrgentes;
   // Central de avisos: abre por cima da aba atual (sino do topo) ou a partir do Início. null = fechada; { hidden } = valores ocultos?
   const [centralAberta, setCentralAberta] = useState(null);
@@ -1492,11 +1514,11 @@ export default function App() {
       )}
 
       <main style={{ maxWidth: 1080, margin: "0 auto", padding: "20px 20px 0" }}>
-        {tab === "dashboard" && <DashboardTab custos={data.custos} receitas={receitasRenda} depositos={depositosRec} demandas={data.demandas} onNavigate={goToItem} onConcluirDemanda={(id) => updateDemandaStatus(id, "Concluída")} inicioContagem={inicioContagem} fixos={fixos} topo={topoApp} onAbrirCentral={(h) => setCentralAberta({ hidden: !!h })} central={central} />}
-        {tab === "custos" && <CustosTab fixos={fixos} fixosErro={fixosErro} onAddFixo={addFixo} onUpdateFixo={updateFixo} onRemoveFixo={removeFixo} custos={data.custos} onAdd={addCusto} onRemove={removeCusto} onUpdate={updateCusto} jumpTarget={jumpTarget && jumpTarget.tab === "custos" ? jumpTarget : null} onConsumeJump={() => setJumpTarget(null)} />}
-        {tab === "receitas" && <ReceitasTab receitas={data.receitas} onAdd={addReceita} onRemove={removeReceita} onUpdate={updateReceita} inicioContagem={inicioContagem} jumpTarget={jumpTarget && jumpTarget.tab === "receitas" ? jumpTarget : null} onConsumeJump={() => setJumpTarget(null)} />}
-        {tab === "resumo" && <ResumoTab custos={data.custos} receitas={receitasRenda} inicioContagem={inicioContagem} onChangeInicio={mudarInicioContagem} />}
-        {tab === "demandas" && <DemandasTab demandas={data.demandas} onAdd={addDemanda} onRemove={removeDemanda} onUpdate={updateDemanda} onStatusChange={updateDemandaStatus} jumpTarget={jumpTarget && jumpTarget.tab === "demandas" ? jumpTarget : null} onConsumeJump={() => setJumpTarget(null)} />}
+        {tab === "dashboard" && <DashboardTab key={diaHoje} custos={data.custos} receitas={receitasRenda} depositos={depositosRec} demandas={data.demandas} onNavigate={goToItem} onConcluirDemanda={(id) => updateDemandaStatus(id, "Concluída")} inicioContagem={inicioContagem} fixos={fixos} topo={topoApp} onAbrirCentral={(h) => setCentralAberta({ hidden: !!h })} central={central} />}
+        {tab === "custos" && <CustosTab key={diaHoje} fixos={fixos} fixosErro={fixosErro} onAddFixo={addFixo} onUpdateFixo={updateFixo} onRemoveFixo={removeFixo} custos={data.custos} onAdd={addCusto} onRemove={removeCusto} onUpdate={updateCusto} jumpTarget={jumpTarget && jumpTarget.tab === "custos" ? jumpTarget : null} onConsumeJump={() => setJumpTarget(null)} />}
+        {tab === "receitas" && <ReceitasTab key={diaHoje} receitas={data.receitas} onAdd={addReceita} onRemove={removeReceita} onUpdate={updateReceita} inicioContagem={inicioContagem} jumpTarget={jumpTarget && jumpTarget.tab === "receitas" ? jumpTarget : null} onConsumeJump={() => setJumpTarget(null)} />}
+        {tab === "resumo" && <ResumoTab key={diaHoje} custos={data.custos} receitas={receitasRenda} inicioContagem={inicioContagem} onChangeInicio={mudarInicioContagem} />}
+        {tab === "demandas" && <DemandasTab key={diaHoje} demandas={data.demandas} onAdd={addDemanda} onRemove={removeDemanda} onUpdate={updateDemanda} onStatusChange={updateDemandaStatus} jumpTarget={jumpTarget && jumpTarget.tab === "demandas" ? jumpTarget : null} onConsumeJump={() => setJumpTarget(null)} />}
       </main>
 
       <BottomNav tab={tab} setTab={setTab} />
@@ -1802,7 +1824,7 @@ function BalanceHero({ pix, saldo, trendAtual, trendAnterior, mesLabel, hidden, 
 
 // Overdue or due-within-7-days custos/demandas, surfaced at the very top
 // of the dashboard so nothing urgent needs to be hunted for.
-function useAtencao(custos, demandas, dias = 7) {
+function useAtencao(custos, demandas, dias = 7, diaHoje = null) {
   return useMemo(() => {
     const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
     const limite = new Date(hoje); limite.setDate(limite.getDate() + dias);
@@ -1827,7 +1849,7 @@ function useAtencao(custos, demandas, dias = 7) {
         const ord = { "Alta": 0, "Média": 1, "Baixa": 2 };
         return (a.dateObj - b.dateObj) || ((ord[a.prio] ?? 1) - (ord[b.prio] ?? 1)) || String(a.label || "").localeCompare(String(b.label || ""));
       });
-  }, [custos, demandas, dias]);
+  }, [custos, demandas, dias, diaHoje]);
 }
 
 // "Atrasado há 20 dias" stays in days; very old items read better in months.
@@ -1872,8 +1894,8 @@ const diasAteVenc = (iso) => {
 // Central de avisos: atrasados + o que vence nos próximos 14 dias (custos, tarefas e fixos ainda não lançados). Só leitura.
 // Tarefa atrasada há 30 dias ou mais sai da contagem de urgentes e vai para o grupo "Paradas" (continua visível e acionável).
 const PARADA_DIAS = 30;
-function useCentralAvisos(custos, demandas, fixos, dias = 14) {
-  const base = useAtencao(custos, demandas, dias);
+function useCentralAvisos(custos, demandas, fixos, dias = 14, diaHoje = null) {
+  const base = useAtencao(custos, demandas, dias, diaHoje);
   return useMemo(() => {
     const mes = currentMonth();
     const lista = base.map(i => ({
@@ -1896,7 +1918,7 @@ function useCentralAvisos(custos, demandas, fixos, dias = 14) {
     const itens = lista.filter(i => !ehParada(i));
     const parados = lista.filter(ehParada);
     return { itens, parados, nUrgentes: itens.filter(i => diasAteVenc(i.data) <= 0).length };
-  }, [base, custos, fixos, dias]);
+  }, [base, custos, fixos, dias, diaHoje]);
 }
 const rotuloAgenda = (item) => {
   const [y, m, d] = String(item.data).split("-").map(Number);
