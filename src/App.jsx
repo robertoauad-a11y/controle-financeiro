@@ -1419,13 +1419,12 @@ export default function App() {
                     <Download size={15} /> Exportar Excel
                   </button>
                   <div style={{ height: 1, background: C.border, margin: "4px 6px" }} />
-                  <button onClick={() => { setMenuOpen(false); escolherTema(temaAtual === "claro" ? "escuro" : "claro"); }} style={menuItemStyle}>
-                    {temaAtual === "claro" ? <Moon size={15} /> : <Sun size={15} />} {temaAtual === "claro" ? "Usar tema escuro" : "Usar tema claro"}
-                  </button>
-                  <button onClick={() => escolherTema(temaPref === "auto" ? temaAtual : "auto")} style={menuItemStyle}>
-                    <Sun size={15} /> Tema automático
-                    {temaPref === "auto" && <Check size={15} color={C.emerald} style={{ marginLeft: "auto" }} />}
-                  </button>
+                  {[["escuro", "Tema escuro", Moon], ["claro", "Tema claro", Sun], ["auto", "Tema automático", Sun]].map(([v, rot, Ic]) => (
+                    <button key={v} onClick={() => { setMenuOpen(false); escolherTema(v); }} style={menuItemStyle}>
+                      <Ic size={15} /> {rot}
+                      {temaPref === v && <Check size={15} color={C.emerald} style={{ marginLeft: "auto" }} />}
+                    </button>
+                  ))}
                   <div style={{ height: 1, background: C.border, margin: "4px 6px" }} />
                   <button onClick={() => { setMenuOpen(false); handleLogout(); }} style={{ ...menuItemStyle, color: C.coral }}>
                     <X size={15} /> Sair
@@ -1713,7 +1712,7 @@ function BalanceHero({ pix, saldo, trendAtual, trendAnterior, mesLabel, hidden, 
           <>
             <div style={{ height: 96, marginTop: 16 }}>
               <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={curva.rows} margin={{ top: 8, right: 8, left: 8, bottom: 0 }}>
+                <AreaChart data={curva.rows} margin={{ top: 8, right: 8, left: 8, bottom: 8 }}>
                   <defs>
                     <linearGradient id="gCurva" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="0%" stopColor={saldo < 0 ? "#FF8A76" : "#4FE8BE"} stopOpacity={0.35} /><stop offset="100%" stopColor={saldo < 0 ? "#FF8A76" : "#4FE8BE"} stopOpacity={0.02} />
@@ -2813,9 +2812,10 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
     const map = new Map();
     receitas.filter(r => r.mes === mesAtual).forEach(r => {
       const nome = (r.descricao || "Outras").toUpperCase();
-      const g = map.get(nome) || { nome, Previsto: 0, Recebido: 0 };
+      const g = map.get(nome) || { nome, Previsto: 0, Recebido: 0, Pendente: false };
       g.Previsto += Number(r.valorPrevisto || 0);
       g.Recebido += Number(r.valorRecebido || 0);
+      if (r.status !== "Recebido") g.Pendente = true;
       map.set(nome, g);
     });
     return [...map.values()].sort((a, b) => b.Previsto - a.Previsto).slice(0, 6);
@@ -3468,7 +3468,7 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
                     <div style={{ height: 7, borderRadius: 4, background: C.border, overflow: "hidden" }}>
                       <div style={{ width: `${pct}%`, height: "100%", borderRadius: 4, background: "linear-gradient(90deg, #00E0A8, #22D3EE)" }} />
                     </div>
-                    {falta > 0.005 && <div style={{ fontSize: 11, color: C.faint, marginTop: 4 }}>falta {hidden ? "•••" : fmtBRL(falta)}</div>}
+                    {falta > 0.005 && <div style={{ fontSize: 11, color: C.faint, marginTop: 4 }}>{r.Pendente ? "falta " : ""}{hidden ? "•••" : fmtBRL(falta)}{r.Pendente ? "" : " abaixo do previsto"}</div>}
                   </div>
                 );
               })}
