@@ -1194,6 +1194,7 @@ export default function App() {
     };
   }, []);
   const central = useCentralAvisos(custos, demandas, fixos, 14, diaHoje);
+  const sugestoes = useSugestoes(custos, fixos, diaHoje);
   const nAtrasadosApp = central.nUrgentes;
   // Central de avisos: abre por cima da aba atual (sino do topo) ou a partir do Início. null = fechada; { hidden } = valores ocultos?
   const [centralAberta, setCentralAberta] = useState(null);
@@ -1508,7 +1509,7 @@ export default function App() {
       )}
 
       {centralAberta && (
-        <CentralAvisosModal central={central} hidden={centralAberta.hidden} onClose={() => setCentralAberta(null)}
+        <CentralAvisosModal central={central} sugestoes={sugestoes} hidden={centralAberta.hidden} onClose={() => setCentralAberta(null)}
           onNavigate={goToItem} onConcluirDemanda={(id) => updateDemandaStatus(id, "Concluída")} />
       )}
 
@@ -1919,6 +1920,44 @@ function useCentralAvisos(custos, demandas, fixos, dias = 14, diaHoje = null) {
     return { itens, parados, nUrgentes: itens.filter(i => diasAteVenc(i.data) <= 0).length };
   }, [base, custos, fixos, dias, diaHoje]);
 }
+// Sugestões do app (só leitura, fora da contagem do sininho): (1) itens que se repetem todo mês e não estão nos Fixos;
+// (2) lançamentos deste mês bem acima do que esse mesmo item costuma custar. Nada é gravado: o app sugere, você decide.
+function useSugestoes(custos, fixos, diaHoje = null) {
+  return useMemo(() => {
+    const mes = currentMonth();
+    const [a0, m0] = mes.split("-").map(Number);
+    const mk = (i) => { const d = new Date(a0, m0 - 1 - i, 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; };
+    const prev = [1, 2, 3, 4].map(mk);
+    const valorDe = (c) => Number(c.status === "Pago" ? (c.valorPago ?? c.valorPrevisto) : c.valorPrevisto) || 0;
+    const porDesc = new Map();
+    custos.forEach(c => {
+      const n = normDesc(c.descricao); if (!n) return;
+      const e = porDesc.get(n) || { label: c.descricao, meses: {}, ultimo: "" };
+      e.meses[c.mes] = (e.meses[c.mes] || 0) + valorDe(c);
+      if (c.mes >= e.ultimo) { e.ultimo = c.mes; e.label = c.descricao; }
+      porDesc.set(n, e);
+    });
+    const nomesFixos = new Set((fixos || []).filter(f => f.ativo !== false).map(f => normDesc(f.descricao)));
+    const recorrentes = [], foraPadrao = [];
+    porDesc.forEach((e, n) => {
+      const hist = prev.filter(m => e.meses[m] > 0);
+      if (!nomesFixos.has(n) && hist.length >= 3) {
+        recorrentes.push({ key: `r|${n}`, label: e.label, n: hist.length, media: hist.reduce((s, m) => s + e.meses[m], 0) / hist.length });
+      }
+      const atual = e.meses[mes];
+      const h3 = prev.slice(0, 3).filter(m => e.meses[m] > 0);
+      if (atual > 0 && h3.length >= 2) {
+        const media = h3.reduce((s, m) => s + e.meses[m], 0) / h3.length;
+        if (atual > media * 1.25 && atual - media >= 50) foraPadrao.push({ key: `f|${mes}|${n}`, label: e.label, atual, media, pct: Math.round((atual / media - 1) * 100) });
+      }
+    });
+    recorrentes.sort((x, y) => y.n - x.n || y.media - x.media);
+    foraPadrao.sort((x, y) => (y.atual - y.media) - (x.atual - x.media));
+    return { recorrentes, foraPadrao };
+  }, [custos, fixos, diaHoje]);
+}
+const SUG_KEY = "pt_sug_ignoradas";
+const lerSugIgn = () => { try { return JSON.parse(localStorage.getItem(SUG_KEY) || "[]"); } catch (e) { return []; } };
 const rotuloAgenda = (item) => {
   const [y, m, d] = String(item.data).split("-").map(Number);
   const dow = ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"][new Date(y, m - 1, d).getDay()];
@@ -2268,6 +2307,8 @@ const FIXOS_INICIAIS = [
   { descricao: "Pensão Rubem", dia: 5, valor: 1000, fonte: "" },
   { descricao: "Pensão Zannie", dia: 5, valor: 700, fonte: "" },
 ];
+// Mesmo título de receita, tolerando acréscimo no fim ("Aluguel Via" = "Aluguel Via Ipiranga"). Só leitura: usado nas estimativas.
+const tituloMesmo = (a, b) => a === b || a.startsWith(b + " ") || b.startsWith(a + " ");
 const normDesc = (t) => String(t || "").trim().toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
 // Vencimento of a fixo in month "AAAA-MM", clamped to the month's last day.
 function vencimentoDoFixo(f, mes) {
@@ -2339,6 +2380,18 @@ function FixosLed({ fixos, custos, mes, onOpen, erro }) {
 function FixosModal({ fixos, custos, mes, onLancar, onAdd, onUpdate, onRemove, onClose }) {
   const { ativos, faltam } = useMemo(() => fixosPendentes(fixos, custos, mes), [fixos, custos, mes]);
   const [aba, setAba] = useState("mes");
+  // Sugestões (só leitura): itens que se repetem todo mês e ainda não são fixos. "Cadastrar" só preenche o formulário; você confirma em Adicionar.
+  const sug = useSugestoes(custos, fixos);
+  const [ignFx, setIgnFx] = useState(lerSugIgn);
+  const sugFx = sug.recorrentes.filter(x => !ignFx.includes(x.key)).slice(0, 6);
+  const ignorarFx = (k) => setIgnFx(l => { const n = [...l, k].slice(-200); try { localStorage.setItem(SUG_KEY, JSON.stringify(n)); } catch (e) { /* sem armazenamento: só não lembra */ } return n; });
+  const cadastrarSug = (x) => {
+    const n = normDesc(x.label);
+    const ult = [...custos].filter(c => normDesc(c.descricao) === n).sort((a, b) => String(b.mes).localeCompare(String(a.mes)))[0];
+    const dia = ult && ult.vencimento ? String(parseInt(ult.vencimento.slice(8, 10), 10) || "") : "";
+    const fonte = ult && FONTES_FORM.includes(ult.fonte) ? ult.fonte : "Varia";
+    setF({ id: null, descricao: x.label, dia, valor: "", valorPago: "", fonte, ativo: true });
+  };
   const vazio = { id: null, descricao: "", dia: "", valor: "", valorPago: "", fonte: "Varia", ativo: true };
   const [f, setF] = useState(vazio);
   const [busy, setBusy] = useState(false);
@@ -2373,7 +2426,7 @@ function FixosModal({ fixos, custos, mes, onLancar, onAdd, onUpdate, onRemove, o
     <Modal title="Fixos do mês" onClose={onClose}>
       <div style={{ padding: "4px 0 24px" }}>
         <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-          {[["mes", `Para lançar (${faltam.length})`], ["lista", "Gerenciar lista"]].map(([k, t]) => (
+          {[["mes", `Para lançar (${faltam.length})`], ["lista", sugFx.length > 0 ? `Gerenciar lista · ${sugFx.length} ${sugFx.length === 1 ? "sugestão" : "sugestões"}` : "Gerenciar lista"]].map(([k, t]) => (
             <button key={k} type="button" onClick={() => setAba(k)} style={{ border: `1px solid ${aba === k ? C.emerald : C.border}`, background: aba === k ? C.emeraldSoft : C.page, color: aba === k ? C.emerald : C.muted, borderRadius: 10, padding: "8px 14px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>{t}</button>
           ))}
         </div>
@@ -2421,6 +2474,22 @@ function FixosModal({ fixos, custos, mes, onLancar, onAdd, onUpdate, onRemove, o
             <button type="button" style={{ ...mini, color: C.coral }} onClick={async () => { if (await confirmar(`Excluir "${x.descricao}" da lista de fixos? Os custos já lançados não mudam.`, { perigo: true, okLabel: "Excluir" })) onRemove(x.id); }}>Excluir</button>
           </div>
         ))}
+        {sugFx.length > 0 && (
+          <div style={{ marginTop: 18 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: C.muted, textTransform: "uppercase", letterSpacing: 0.5 }}>Sugestões do app ({sugFx.length})</div>
+            <div style={{ fontSize: 11.5, color: C.faint, margin: "2px 0 4px", lineHeight: 1.45 }}>Aparecem quase todo mês e ainda não estão nos Fixos. "Cadastrar" só preenche o formulário abaixo; nada é gravado até você tocar em Adicionar.</div>
+            {sugFx.map(x => (
+              <div key={x.key} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 0", borderTop: `1px solid ${C.border}` }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13.5, fontWeight: 600, color: C.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{x.label}</div>
+                  <div style={{ fontSize: 11.5, color: C.faint }}>em {x.n} dos últimos 4 meses · média {fmtBRL(x.media)}</div>
+                </div>
+                <button type="button" style={mini} onClick={() => cadastrarSug(x)}>Cadastrar</button>
+                <button type="button" style={mini} onClick={() => ignorarFx(x.key)}>Ignorar</button>
+              </div>
+            ))}
+          </div>
+        )}
         <form onSubmit={salvar} style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginTop: 20 }}>
           <div style={{ gridColumn: "span 2", fontSize: 12, fontWeight: 700, color: C.muted, textTransform: "uppercase", letterSpacing: 0.5 }}>{f.id ? "Editar fixo" : "Novo fixo"}</div>
           <Field label="Descrição" span={2}><TextInput value={f.descricao} onChange={e => setF({ ...f, descricao: e.target.value })} /></Field>
@@ -2707,8 +2776,15 @@ function ProximosDiasCard({ itens, onOpenItem, onAcao, hidden, central = false, 
 
 // Central de avisos: atrasados e o que vence nos próximos 14 dias (+ tarefas paradas há muito tempo, recolhidas).
 // Fica no nível do App para abrir por cima de qualquer aba, sem trocar de aba.
-function CentralAvisosModal({ central, hidden = false, onClose, onNavigate, onConcluirDemanda }) {
+function CentralAvisosModal({ central, sugestoes = null, hidden = false, onClose, onNavigate, onConcluirDemanda }) {
   const [paradosAberto, setParadosAberto] = useState(false);
+  const [sugAberto, setSugAberto] = useState(false);
+  const [ign, setIgn] = useState(lerSugIgn);
+  const ignorar = (k) => setIgn(l => { const n = [...l, k].slice(-200); try { localStorage.setItem(SUG_KEY, JSON.stringify(n)); } catch (e) { /* sem armazenamento: só não lembra */ } return n; });
+  const sugRec = sugestoes ? sugestoes.recorrentes.filter(x => !ign.includes(x.key)).slice(0, 6) : [];
+  const sugFora = sugestoes ? sugestoes.foraPadrao.filter(x => !ign.includes(x.key)).slice(0, 6) : [];
+  const nSug = sugRec.length + sugFora.length;
+  const btnIgn = (k) => <button type="button" className="tap" onClick={() => ignorar(k)} style={{ border: `1px solid ${C.border}`, background: "transparent", color: C.muted, borderRadius: 12, height: 26, padding: "0 10px", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", flexShrink: 0 }}>Ignorar</button>;
   return (
     <Modal title="Central de avisos" onClose={onClose}>
       <div style={{ fontSize: 11.5, color: C.faint, marginBottom: 10 }}>Atrasados e tudo o que vence nos próximos 14 dias.</div>
@@ -2739,6 +2815,41 @@ function CentralAvisosModal({ central, hidden = false, onClose, onNavigate, onCo
               style={{ marginTop: 10, height: 34, borderRadius: 17, border: `1px solid ${C.border}`, background: "transparent", color: C.inkSoft, cursor: "pointer", fontSize: 12, fontWeight: 700, padding: "0 14px", fontFamily: "inherit" }}>
               Adiar todas de uma vez…
             </button>
+          </>}
+        </div>
+      )}
+      {nSug > 0 && (
+        <div style={{ marginTop: 18, paddingTop: 12, borderTop: `1px solid ${C.border}` }}>
+          <button type="button" className="tap" onClick={() => setSugAberto(a => !a)} aria-expanded={sugAberto}
+            style={{ width: "100%", display: "flex", alignItems: "center", gap: 8, border: "none", background: "transparent", color: C.ink, cursor: "pointer", fontFamily: "inherit", padding: "4px 0", textAlign: "left" }}>
+            <span style={{ fontWeight: 700, fontSize: 12.5, textTransform: "uppercase", letterSpacing: 0.4 }}>Sugestões do app</span>
+            <span style={{ fontSize: 11, fontWeight: 700, color: C.muted, background: C.border, borderRadius: 10, padding: "1px 8px" }}>{nSug}</span>
+            <ChevronDown size={18} color={C.muted} style={{ marginLeft: "auto", transform: sugAberto ? "rotate(180deg)" : "none", transition: "transform .2s ease" }} />
+          </button>
+          <div style={{ fontSize: 11.5, color: C.faint, margin: "2px 0 6px" }}>O app só sugere, você decide. Não entram na contagem de avisos.</div>
+          {sugAberto && <>
+            {sugFora.length > 0 && (
+              <ObsBloco titulo="Acima do habitual" nota="Lançamentos deste mês bem acima do que o mesmo item costuma custar (média dos últimos meses).">
+                {sugFora.map(x => (
+                  <div key={x.key} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <div style={{ flex: 1, minWidth: 0 }}><ObsLinha nome={x.label} detalhe={`${hidden ? "•••" : fmtBRL(x.atual)} · média ${hidden ? "•••" : fmtBRL(x.media)} (+${x.pct}%)`} /></div>
+                    {btnIgn(x.key)}
+                  </div>
+                ))}
+              </ObsBloco>
+            )}
+            {sugRec.length > 0 && (
+              <ObsBloco titulo="Parecem fixos" nota="Aparecem quase todo mês e não estão na sua lista de Fixos. Se for o caso, cadastre em Fixos para o app lembrar e estimar.">
+                {sugRec.map(x => (
+                  <div key={x.key} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <div style={{ flex: 1, minWidth: 0 }}><ObsLinha nome={x.label} detalhe={`em ${x.n} dos últimos 4 meses · média ${hidden ? "•••" : fmtBRL(x.media)}`} /></div>
+                    {btnIgn(x.key)}
+                  </div>
+                ))}
+                <button type="button" className="tap" onClick={() => { onClose(); onNavigate && onNavigate("custos", null, { abrirFixos: true }); }}
+                  style={{ marginTop: 8, height: 34, borderRadius: 17, border: `1px solid ${C.border}`, background: "transparent", color: C.inkSoft, cursor: "pointer", fontSize: 12, fontWeight: 700, padding: "0 14px", fontFamily: "inherit" }}>Abrir Fixos</button>
+              </ObsBloco>
+            )}
           </>}
         </div>
       )}
@@ -2953,6 +3064,20 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
     return [...grupos.values()].sort((a, b) => b.valor - a.valor).slice(0, 7);
   }, [custos, mesAtual]);
   const topMax = Math.max(1, ...topCustos.map(c => c.valor));
+  // "vs habitual": item bem acima do que ele mesmo costuma custar (média dos 3 meses anteriores ao mês visto). Só leitura.
+  const habitualDe = useMemo(() => {
+    const out = {};
+    const [a0, m0] = mesAtual.split("-").map(Number);
+    const prev = [1, 2, 3].map(i => { const d = new Date(a0, m0 - 1 - i, 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; });
+    topCustos.forEach(t => {
+      const n = normDesc(t.descricao);
+      const vals = prev.map(m => custos.filter(c => c.mes === m && normDesc(c.descricao) === n).reduce((sum, c) => sum + Number(c.valorPago ?? c.valorPrevisto ?? 0), 0)).filter(v => v > 0);
+      if (vals.length < 2) return;
+      const media = vals.reduce((x, y) => x + y, 0) / vals.length;
+      if (t.valor > media * 1.25 && t.valor - media >= 50) out[t.id] = Math.round((t.valor / media - 1) * 100);
+    });
+    return out;
+  }, [custos, mesAtual, topCustos]);
 
   const projecao = useMemo(() => {
     const cs = custos.filter(c => c.mes === mesAtual);
@@ -2978,7 +3103,8 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
   const receitasEst = useMemo(() => {
     if (!ehMesCorrente) return { total: 0, itens: [] };
     const tit = (r) => (r.descricao || "Outras").toUpperCase();
-    const jaTem = new Set(receitas.filter(r => r.mes === mesAtual).map(tit));
+    const titsAtuais = receitas.filter(r => r.mes === mesAtual).map(tit);
+    const jaTem = { has: (t) => titsAtuais.some(x => tituloMesmo(x, t)) };
     const vistos = new Set();
     const itens = [];
     receitas.filter(r => r.mes === mesAnterior).forEach(r => {
@@ -3339,6 +3465,7 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
                     <span style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 600, color: C.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                       {c.descricao}
                       {c.fontes.length > 1 && <span style={{ color: C.faint, fontWeight: 500, fontSize: 11 }}> · {c.fontes.length} fontes</span>}
+                      {habitualDe[c.id] != null && <span style={{ color: C.amber, fontWeight: 700, fontSize: 11 }}> · +{habitualDe[c.id]}% vs habitual</span>}
                     </span>
                     <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12.5, color: i === 0 ? C.coral : C.muted, fontWeight: i === 0 ? 700 : 500 }}>{hidden ? "•••" : fmtBRL(c.valor)}</span>
                   </div>
@@ -3413,7 +3540,7 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
                 <span key={k} style={{ display: "flex", alignItems: "center", gap: 5 }}>
                   <span style={{ width: 9, height: 9, borderRadius: 3, background: fonteColor(k) }} />
                   {k === "Conta Salário" ? "CS" : k === "Conta Corrente" ? "CC" : k}{" "}
-                  <strong style={{ color: ult < 0 ? C.coral : C.ink, fontVariantNumeric: "tabular-nums" }}>{hidden ? "•••" : fmtBRL(ult)}</strong>
+                  <strong style={{ color: ult < 0 ? C.coral : C.ink, fontVariantNumeric: "tabular-nums" }}>{hidden ? "•••" : `${ult > 0.005 ? "+" : ""}${fmtBRL(ult)}`}</strong>
                 </span>
               );
             })}
@@ -4037,7 +4164,8 @@ function ReceitasTab({ receitas, onAdd, onRemove, onUpdate, inicioContagem, jump
   const esperadas = useMemo(() => {
     if (mesFiltro !== currentMonth()) return [];
     const tit = (r) => (r.descricao || "Outras").toUpperCase();
-    const jaTem = new Set(rendas.map(tit));
+    const titsAtuais = rendas.map(tit);
+    const jaTem = { has: (t) => titsAtuais.some(x => tituloMesmo(x, t)) };
     const ant = shiftMonth(mesFiltro, -1);
     const grupos = new Map();
     receitas.filter(r => r.mes === ant && !ehDeposito(r)).forEach(r => {
