@@ -18,6 +18,7 @@ import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, BarChart, Bar, XAxis
 const custosCol = collection(db, "custos");
 const receitasCol = collection(db, "receitas");
 const demandasCol = collection(db, "demandas");
+const recRecCol = collection(db, "recorrentesReceitas");   // lista de receitas habituais (aluguéis, salário...): só muda por ação explícita
 const fixosCol = collection(db, "recorrentes");   // list of monthly fixed costs (only changed by explicit action)
 
 const MESES = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
@@ -1155,6 +1156,8 @@ export default function App() {
   const [demandas, setDemandas] = useState([]);
   const [fixos, setFixos] = useState([]);
   const [fixosErro, setFixosErro] = useState(false);
+  const [recRec, setRecRec] = useState([]);
+  const [recRecErro, setRecRecErro] = useState(false);
   const [loadedFlags, setLoadedFlags] = useState({ custos: false, receitas: false, demandas: false });
   const [tab, setTab] = useState("dashboard");
   const [temaPref, setTemaPref] = useState(lerTemaPref);
@@ -1239,7 +1242,8 @@ export default function App() {
     }, () => setSaveError(true));
     // Fixos list: its own listener; a permission error here must not raise the app-wide save error.
     const unsubF = onSnapshot(fixosCol, snap => { setFixos(snap.docs.map(toRow)); setFixosErro(false); }, () => setFixosErro(true));
-    return () => { unsubC(); unsubR(); unsubD(); unsubF(); };
+    const unsubRR = onSnapshot(recRecCol, snap => { setRecRec(snap.docs.map(toRow)); setRecRecErro(false); }, () => setRecRecErro(true));
+    return () => { unsubC(); unsubR(); unsubD(); unsubF(); unsubRR(); };
   }, [user]);
 
   // Every write below touches only the single document it concerns —
@@ -1255,6 +1259,10 @@ export default function App() {
     try { await updateDoc(doc(db, "custos", id), c); setSaveError(false); } catch (e) { setSaveError(true); }
   };
   const avisoFixos = () => alert("Não consegui gravar a lista de fixos. Provavelmente falta liberar a coleção \"recorrentes\" nas regras do Firestore.");
+  const avisoRecRec = () => alert("Não consegui gravar a lista de receitas recorrentes. Provavelmente falta liberar a coleção \"recorrentesReceitas\" nas regras do Firestore.");
+  const addRecRec = async (x) => { try { await addDoc(recRecCol, x); } catch (e) { avisoRecRec(); } };
+  const updateRecRec = async (id, x) => { try { await updateDoc(doc(db, "recorrentesReceitas", id), x); } catch (e) { avisoRecRec(); } };
+  const removeRecRec = async (id) => { try { await deleteDoc(doc(db, "recorrentesReceitas", id)); } catch (e) { avisoRecRec(); } };
   const addFixo = async (x) => { try { await addDoc(fixosCol, x); } catch (e) { avisoFixos(); } };
   const updateFixo = async (id, x) => { try { await updateDoc(doc(db, "recorrentes", id), x); } catch (e) { avisoFixos(); } };
   const removeFixo = async (id) => { try { await deleteDoc(doc(db, "recorrentes", id)); } catch (e) { avisoFixos(); } };
@@ -1514,9 +1522,9 @@ export default function App() {
       )}
 
       <main style={{ maxWidth: 1080, margin: "0 auto", padding: "20px 20px 0" }}>
-        {tab === "dashboard" && <DashboardTab key={diaHoje} custos={data.custos} receitas={receitasRenda} depositos={depositosRec} demandas={data.demandas} onNavigate={goToItem} onConcluirDemanda={(id) => updateDemandaStatus(id, "Concluída")} inicioContagem={inicioContagem} fixos={fixos} topo={topoApp} onAbrirCentral={(h) => setCentralAberta({ hidden: !!h })} central={central} />}
+        {tab === "dashboard" && <DashboardTab key={diaHoje} custos={data.custos} receitas={receitasRenda} depositos={depositosRec} demandas={data.demandas} onNavigate={goToItem} onConcluirDemanda={(id) => updateDemandaStatus(id, "Concluída")} inicioContagem={inicioContagem} fixos={fixos} recRec={recRec} topo={topoApp} onAbrirCentral={(h) => setCentralAberta({ hidden: !!h })} central={central} />}
         {tab === "custos" && <CustosTab key={diaHoje} fixos={fixos} fixosErro={fixosErro} onAddFixo={addFixo} onUpdateFixo={updateFixo} onRemoveFixo={removeFixo} custos={data.custos} onAdd={addCusto} onRemove={removeCusto} onUpdate={updateCusto} jumpTarget={jumpTarget && jumpTarget.tab === "custos" ? jumpTarget : null} onConsumeJump={() => setJumpTarget(null)} />}
-        {tab === "receitas" && <ReceitasTab key={diaHoje} receitas={data.receitas} onAdd={addReceita} onRemove={removeReceita} onUpdate={updateReceita} inicioContagem={inicioContagem} jumpTarget={jumpTarget && jumpTarget.tab === "receitas" ? jumpTarget : null} onConsumeJump={() => setJumpTarget(null)} />}
+        {tab === "receitas" && <ReceitasTab key={diaHoje} recRec={recRec} recErro={recRecErro} onAddRec={addRecRec} onUpdateRec={updateRecRec} onRemoveRec={removeRecRec} receitas={data.receitas} onAdd={addReceita} onRemove={removeReceita} onUpdate={updateReceita} inicioContagem={inicioContagem} jumpTarget={jumpTarget && jumpTarget.tab === "receitas" ? jumpTarget : null} onConsumeJump={() => setJumpTarget(null)} />}
         {tab === "resumo" && <ResumoTab key={diaHoje} custos={data.custos} receitas={receitasRenda} inicioContagem={inicioContagem} onChangeInicio={mudarInicioContagem} />}
         {tab === "demandas" && <DemandasTab key={diaHoje} demandas={data.demandas} onAdd={addDemanda} onRemove={removeDemanda} onUpdate={updateDemanda} onStatusChange={updateDemandaStatus} jumpTarget={jumpTarget && jumpTarget.tab === "demandas" ? jumpTarget : null} onConsumeJump={() => setJumpTarget(null)} />}
       </main>
@@ -1931,7 +1939,7 @@ function useSugestoes(custos, fixos, diaHoje = null) {
     const valorDe = (c) => Number(c.status === "Pago" ? (c.valorPago ?? c.valorPrevisto) : c.valorPrevisto) || 0;
     const porDesc = new Map();
     custos.forEach(c => {
-      const n = normDesc(c.descricao); if (!n) return;
+      const n = normDesc(c.descricao); if (!n || /^(saque|deposito)\b/.test(n)) return;
       const e = porDesc.get(n) || { label: c.descricao, meses: {}, ultimo: "" };
       e.meses[c.mes] = (e.meses[c.mes] || 0) + valorDe(c);
       if (c.mes >= e.ultimo) { e.ultimo = c.mes; e.label = c.descricao; }
@@ -2309,6 +2317,36 @@ const FIXOS_INICIAIS = [
 ];
 // Mesmo título de receita, tolerando acréscimo no fim ("Aluguel Via" = "Aluguel Via Ipiranga"). Só leitura: usado nas estimativas.
 const tituloMesmo = (a, b) => a === b || a.startsWith(b + " ") || b.startsWith(a + " ");
+// Receitas esperadas no mês (ainda não lançadas). Se existe lista de recorrentes ativa, ELA manda; sem lista, vale o mês anterior (como antes).
+function esperadasReceitas(receitas, recRec, mes) {
+  const tit = (r) => (r.descricao || "Outras").toUpperCase();
+  const titsAtuais = receitas.filter(r => r.mes === mes && !ehDeposito(r)).map(tit);
+  const jaTem = (t) => titsAtuais.some(x => tituloMesmo(x, t));
+  const grupos = new Map();
+  const ativos = (recRec || []).filter(x => x.ativo !== false);
+  if (ativos.length > 0) {
+    ativos.forEach(x => {
+      const t = tit(x);
+      if (jaTem(t)) return;
+      const g = grupos.get(t) || { titulo: t, descricao: x.descricao, valor: 0, categoria: x.categoria || "", conta: x.conta || "", dia: 0 };
+      g.valor += Number(x.valor || 0);
+      const dd = Number(x.dia) || 0; if (dd > g.dia) g.dia = dd;
+      grupos.set(t, g);
+    });
+  } else {
+    const ant = shiftMonth(mes, -1);
+    receitas.filter(r => r.mes === ant && !ehDeposito(r)).forEach(r => {
+      const t = tit(r);
+      if (jaTem(t)) return;
+      const g = grupos.get(t) || { titulo: t, descricao: r.descricao, valor: 0, categoria: r.categoria || "", conta: r.contaDestino || "", dia: 0 };
+      g.valor += Number(r.valorRecebido ?? r.valorPrevisto ?? 0);
+      const dd = Number(String(r.dataRecebimento || "").slice(8, 10)) || 0;
+      if (dd > g.dia) g.dia = dd;
+      grupos.set(t, g);
+    });
+  }
+  return [...grupos.values()].filter(g => g.valor > 0).sort((a, b) => b.valor - a.valor);
+}
 const normDesc = (t) => String(t || "").trim().toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
 // Vencimento of a fixo in month "AAAA-MM", clamped to the month's last day.
 function vencimentoDoFixo(f, mes) {
@@ -2503,6 +2541,85 @@ function FixosModal({ fixos, custos, mes, onLancar, onAdd, onUpdate, onRemove, o
           </div>
         </form>
         </div>}
+      </div>
+    </Modal>
+  );
+}
+
+function RecorrentesReceitasModal({ lista, receitas, mes, erro, onAdd, onUpdate, onRemove, onClose }) {
+  const vazio = { id: null, descricao: "", dia: "", valor: "", conta: "Conta Corrente", categoria: "" };
+  const [f, setF] = useState(vazio);
+  const [busy, setBusy] = useState(false);
+  const ord = useMemo(() => [...lista].sort((a, b) => (Number(a.dia) || 0) - (Number(b.dia) || 0) || String(a.descricao || "").localeCompare(String(b.descricao || ""))), [lista]);
+  // Lista inicial: a partir das receitas do mês anterior (mesmo título soma). Só cria quando você toca no botão.
+  const base = useMemo(() => {
+    const ant = shiftMonth(mes, -1);
+    const m = new Map();
+    receitas.filter(r => r.mes === ant && !ehDeposito(r)).forEach(r => {
+      const t = (r.descricao || "").toUpperCase(); if (!t) return;
+      const g = m.get(t) || { descricao: r.descricao, valor: 0, conta: r.contaDestino || "Conta Corrente", categoria: r.categoria || "", dia: 0 };
+      g.valor += Number(r.valorRecebido ?? r.valorPrevisto ?? 0);
+      const dd = Number(String(r.dataRecebimento || "").slice(8, 10)) || 0; if (dd > g.dia) g.dia = dd;
+      m.set(t, g);
+    });
+    return [...m.values()].filter(g => g.valor > 0);
+  }, [receitas, mes]);
+  const criarBase = async () => {
+    if (busy || base.length === 0) return;
+    if (!(await confirmar(`Criar a lista com ${base.length} ${base.length === 1 ? "receita" : "receitas"} do mês anterior (${base.map(x => x.descricao).join(", ")})? Você edita tudo depois.`, { okLabel: "Criar" }))) return;
+    setBusy(true);
+    try { for (const g of base) await onAdd({ descricao: g.descricao, valor: Math.round(g.valor * 100) / 100, dia: g.dia || 1, conta: g.conta, categoria: g.categoria, ativo: true }); } finally { setBusy(false); }
+  };
+  const salvar = async (e) => {
+    e.preventDefault();
+    if (busy) return;
+    const dia = parseInt(f.dia, 10);
+    const valor = parseValorBR(f.valor);
+    if (!f.descricao.trim() || !(dia >= 1 && dia <= 31) || !isValorValido(valor)) { alert("Informe a descrição, o dia do mês (1 a 31) e um valor maior que zero."); return; }
+    const payload = { descricao: f.descricao.trim(), dia, valor, conta: f.conta, categoria: f.categoria.trim(), ativo: true };
+    setBusy(true);
+    try {
+      if (f.id) { const { ativo, ...resto } = payload; await onUpdate(f.id, resto); } else await onAdd(payload);
+      setF(vazio);
+    } finally { setBusy(false); }
+  };
+  const mini = { border: `1px solid ${C.border}`, background: C.page, color: C.muted, borderRadius: 9, padding: "6px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" };
+  return (
+    <Modal title="Receitas recorrentes" onClose={onClose}>
+      <div style={{ padding: "4px 0 24px" }}>
+        <div style={{ fontSize: 12.5, color: C.faint, lineHeight: 1.5, marginBottom: 12 }}>
+          Receitas que entram todo mês. O que ainda não foi lançado no mês vira "Esperada" (e entra na projeção de fechamento). Com a lista vazia, o app usa as receitas do mês anterior.
+        </div>
+        {erro && <div style={{ color: C.coral, fontSize: 12.5, marginBottom: 10 }}>Não consegui ler a lista (provavelmente falta liberar a coleção "recorrentesReceitas" no Firestore). O resto do app segue normal.</div>}
+        {ord.length === 0 && (
+          <div style={{ border: `1px dashed ${C.border}`, borderRadius: 14, padding: 18, textAlign: "center", color: C.muted, fontSize: 13.5, marginBottom: 16 }}>
+            Nenhuma receita recorrente ainda.
+            {base.length > 0 && <div style={{ marginTop: 10 }}><button type="button" onClick={criarBase} disabled={busy} style={{ ...addBtnStyle, margin: "0 auto", opacity: busy ? 0.7 : 1 }}>Criar a partir do mês anterior ({base.length})</button></div>}
+          </div>
+        )}
+        {ord.map(x => (
+          <div key={x.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 0", borderBottom: `1px solid ${C.border}`, opacity: x.ativo === false ? 0.5 : 1 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: C.ink, textTransform: "uppercase" }}>{x.descricao}{x.ativo === false ? " · desativada" : ""}</div>
+              <div style={{ fontSize: 11.5, color: C.faint }}>dia {x.dia} · {fmtBRL(x.valor)} · {x.conta || "conta varia"}</div>
+            </div>
+            <button type="button" style={mini} onClick={() => setF({ id: x.id, descricao: x.descricao, dia: String(x.dia), valor: fmtValorInput(x.valor), conta: x.conta || "Conta Corrente", categoria: x.categoria || "" })}>Editar</button>
+            <button type="button" style={mini} onClick={() => onUpdate(x.id, { ativo: x.ativo === false })}>{x.ativo === false ? "Ativar" : "Desativar"}</button>
+            <button type="button" style={{ ...mini, color: C.coral }} onClick={async () => { if (await confirmar(`Excluir "${x.descricao}" da lista de recorrentes? As receitas já lançadas não mudam.`, { perigo: true, okLabel: "Excluir" })) onRemove(x.id); }}>Excluir</button>
+          </div>
+        ))}
+        <form onSubmit={salvar} style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginTop: 20 }}>
+          <div style={{ gridColumn: "span 2", fontSize: 12, fontWeight: 700, color: C.muted, textTransform: "uppercase", letterSpacing: 0.5 }}>{f.id ? "Editar receita recorrente" : "Nova receita recorrente"}</div>
+          <Field label="Descrição" span={2}><TextInput value={f.descricao} onChange={e => setF({ ...f, descricao: e.target.value })} /></Field>
+          <Field label="Dia do recebimento"><TextInput type="text" inputMode="numeric" placeholder="1 a 31" value={f.dia} onChange={e => setF({ ...f, dia: e.target.value.replace(/\D/g, "").slice(0, 2) })} /></Field>
+          <Field label="Valor previsto (R$)"><TextInput type="text" inputMode="decimal" placeholder="0,00" value={f.valor} onChange={e => setF({ ...f, valor: e.target.value })} /></Field>
+          <Field label="Conta de destino"><SelectInput options={opcoesFonte(f.conta)} value={f.conta} onChange={e => setF({ ...f, conta: e.target.value })} /></Field>
+          <Field label="Categoria (opcional)"><TextInput value={f.categoria} onChange={e => setF({ ...f, categoria: e.target.value })} /></Field>
+          <div style={{ display: "flex", gap: 10, alignItems: "flex-end" }}>
+            <button type="submit" disabled={busy} style={{ ...addBtnStyle, opacity: busy ? 0.7 : 1 }}><Check size={16} /> {f.id ? "Salvar" : "Adicionar"}</button>
+            {f.id && <button type="button" style={mini} onClick={() => setF(vazio)}>Cancelar</button>}
+          </div>
+        </form>
       </div>
     </Modal>
   );
@@ -2831,20 +2948,14 @@ function CentralAvisosModal({ central, sugestoes = null, hidden = false, onClose
             {sugFora.length > 0 && (
               <ObsBloco titulo="Acima do habitual" nota="Lançamentos deste mês bem acima do que o mesmo item costuma custar (média dos últimos meses).">
                 {sugFora.map(x => (
-                  <div key={x.key} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <div style={{ flex: 1, minWidth: 0 }}><ObsLinha nome={x.label} detalhe={`${hidden ? "•••" : fmtBRL(x.atual)} · média ${hidden ? "•••" : fmtBRL(x.media)} (+${x.pct}%)`} /></div>
-                    {btnIgn(x.key)}
-                  </div>
+                  <ObsLinha key={x.key} nome={x.label} detalhe={`${hidden ? "•••" : fmtBRL(x.atual)} · média ${hidden ? "•••" : fmtBRL(x.media)} (+${x.pct}%)`} acao={btnIgn(x.key)} />
                 ))}
               </ObsBloco>
             )}
             {sugRec.length > 0 && (
               <ObsBloco titulo="Parecem fixos" nota="Aparecem quase todo mês e não estão na sua lista de Fixos. Se for o caso, cadastre em Fixos para o app lembrar e estimar.">
                 {sugRec.map(x => (
-                  <div key={x.key} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <div style={{ flex: 1, minWidth: 0 }}><ObsLinha nome={x.label} detalhe={`em ${x.n} dos últimos 4 meses · média ${hidden ? "•••" : fmtBRL(x.media)}`} /></div>
-                    {btnIgn(x.key)}
-                  </div>
+                  <ObsLinha key={x.key} nome={x.label} detalhe={`em ${x.n} dos últimos 4 meses · média ${hidden ? "•••" : fmtBRL(x.media)}`} acao={btnIgn(x.key)} />
                 ))}
                 <button type="button" className="tap" onClick={() => { onClose(); onNavigate && onNavigate("custos", null, { abrirFixos: true }); }}
                   style={{ marginTop: 8, height: 34, borderRadius: 17, border: `1px solid ${C.border}`, background: "transparent", color: C.inkSoft, cursor: "pointer", fontSize: 12, fontWeight: 700, padding: "0 14px", fontFamily: "inherit" }}>Abrir Fixos</button>
@@ -2871,7 +2982,7 @@ function ObsBloco({ titulo, total = null, hidden = false, nota = null, acao = nu
     </div>
   );
 }
-function ObsLinha({ nome, detalhe = null, valor = null, hidden = false }) {
+function ObsLinha({ nome, detalhe = null, valor = null, hidden = false, acao = null }) {
   return (
     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "8px 0", borderTop: `1px solid ${C.border}` }}>
       <div style={{ minWidth: 0 }}>
@@ -2879,11 +2990,12 @@ function ObsLinha({ nome, detalhe = null, valor = null, hidden = false }) {
         {detalhe && <div style={{ fontSize: 11.5, color: C.faint }}>{detalhe}</div>}
       </div>
       {valor !== null && <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, color: C.inkSoft, flexShrink: 0 }}>{hidden ? "R$ •••••" : fmtBRL(valor)}</span>}
+      {acao}
     </div>
   );
 }
 
-function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, onConcluirDemanda, inicioContagem, fixos = [], topo = null, onAbrirCentral, central = { itens: [], parados: [], nUrgentes: 0 } }) {
+function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, onConcluirDemanda, inicioContagem, fixos = [], recRec = [], topo = null, onAbrirCentral, central = { itens: [], parados: [], nUrgentes: 0 } }) {
   const [hidden, setHidden] = useState(false);
   const [saldoAberto, setSaldoAberto] = useState(false);
   const [analise, setAnalise] = useState("evolucao");
@@ -3102,20 +3214,9 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
   // Receitas habituais (mesmo título do mês anterior) ainda não lançadas neste mês entram como ESTIMATIVA de entrada.
   const receitasEst = useMemo(() => {
     if (!ehMesCorrente) return { total: 0, itens: [] };
-    const tit = (r) => (r.descricao || "Outras").toUpperCase();
-    const titsAtuais = receitas.filter(r => r.mes === mesAtual).map(tit);
-    const jaTem = { has: (t) => titsAtuais.some(x => tituloMesmo(x, t)) };
-    const vistos = new Set();
-    const itens = [];
-    receitas.filter(r => r.mes === mesAnterior).forEach(r => {
-      const t = tit(r);
-      if (jaTem.has(t) || vistos.has(t)) return;
-      vistos.add(t);
-      const v = receitas.filter(x => x.mes === mesAnterior && tit(x) === t).reduce((a, x) => a + Number(x.valorRecebido ?? x.valorPrevisto ?? 0), 0);
-      if (v > 0) itens.push({ titulo: t, valor: v });
-    });
+    const itens = esperadasReceitas(receitas, recRec, mesAtual).map(g => ({ titulo: g.titulo, valor: g.valor }));
     return { total: itens.reduce((a, i) => a + i.valor, 0), itens };
-  }, [receitas, mesAtual, mesAnterior, ehMesCorrente]);
+  }, [receitas, recRec, mesAtual, ehMesCorrente]);
   const receitasEstTotal = receitasEst.total;
   const saldoEstimado = projecao.saldoProjetado + receitasEstTotal - fixosEst;
   const projMax = Math.max(1, projecao.recebido + projecao.aReceber + receitasEstTotal, projecao.pago + projecao.aPagar + fixosEst);
@@ -3237,7 +3338,7 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
         <Modal title="Observações da projeção" onClose={() => setObsAberto(false)}>
           <div style={{ fontSize: 11.5, color: C.faint, marginBottom: 14, lineHeight: 1.45 }}>O que entrou como estimativa no saldo de {mesLabel}, além do que já está lançado. Ao lançar cada item, ele deixa de ser estimativa e passa a contar como previsto ou pago.</div>
           {receitasEstTotal > 0 && (
-            <ObsBloco titulo="Receitas esperadas" total={receitasEstTotal} hidden={hidden} nota="Receitas do mês anterior que ainda não foram lançadas neste mês, contadas como entrada.">
+            <ObsBloco titulo="Receitas esperadas" total={receitasEstTotal} hidden={hidden} nota="Receitas habituais (sua lista de recorrentes ou, sem lista, as do mês anterior) que ainda não foram lançadas neste mês, contadas como entrada.">
               {receitasEst.itens.map(i => (
                 <ObsLinha key={i.titulo} hidden={hidden} nome={i.titulo.toLowerCase().replace(/(^|\s)(\S)/g, (m, sp, ch) => sp + ch.toUpperCase())} detalhe="valor do mês anterior" valor={i.valor} />
               ))}
@@ -3858,6 +3959,12 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
     openEdit(alvo);
   };
 
+  // "Pagar" na linha: abre o MESMO formulário já preenchido (Pago, hoje, valor previsto). Só grava quando você tocar em Salvar e confirmar.
+  const pagarLinha = (c) => {
+    setEditingId(c.id);
+    setForm({ ...formDeCusto(c), status: "Pago", dataPagamento: todayISO(), valorPago: c.valorPago != null ? fmtValorInput(c.valorPago) : (c.valorPrevisto ? fmtValorInput(c.valorPrevisto) : "") });
+    setShowForm(true);
+  };
   // One cost row. `embutido` = drawn inside the outline of a split cost (flatter, no own shadow).
   const renderLinhaCusto = (c, i, accent, embutido) => (
     <div key={c.id} className="tap in" onClick={() => openEdit(c)} style={{
@@ -3901,6 +4008,9 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
           <div style={{ fontSize: 10.5, fontWeight: 700, color: C.amberDeep, marginTop: 1 }}>sem valor pago</div>
         )}
       </div>
+      {c.status !== "Pago" && (
+        <button type="button" className="tap" onClick={(e) => { e.stopPropagation(); pagarLinha(c); }} title="Marcar como pago (abre o formulário preenchido)" style={{ border: `1px solid ${C.emerald}`, background: C.emeraldSoft, color: C.emerald, borderRadius: 10, padding: "6px 11px", fontSize: 12, fontWeight: 700, cursor: "pointer", flexShrink: 0, fontFamily: "inherit" }}>Pagar</button>
+      )}
       <button onClick={async (e) => { e.stopPropagation(); if (await confirmar("Remover este custo?", { perigo: true, okLabel: "Remover" })) onRemove(c.id); }} title="Remover" style={{
         border: "none", background: "transparent", color: C.faint, cursor: "pointer",
         padding: 4, display: "flex", alignItems: "center", flexShrink: 0
@@ -4119,7 +4229,8 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
 /*  Receitas Mensais                                                   */
 /* ------------------------------------------------------------------ */
 
-function ReceitasTab({ receitas, onAdd, onRemove, onUpdate, inicioContagem, jumpTarget, onConsumeJump }) {
+function ReceitasTab({ receitas, onAdd, onRemove, onUpdate, inicioContagem, jumpTarget, onConsumeJump, recRec = [], recErro = false, onAddRec, onUpdateRec, onRemoveRec }) {
+  const [showRec, setShowRec] = useState(false);
   const [mesFiltro, setMesFiltro] = useState(currentMonth());
   const [showSeletorMesR, setShowSeletorMesR] = useState(false);
   useMesCorrenteAuto(setMesFiltro);
@@ -4161,24 +4272,18 @@ function ReceitasTab({ receitas, onAdd, onRemove, onUpdate, inicioContagem, jump
   const meiosRec = useMemo(() => notasMeios(receitasComoCustos(rendas).filter(c => c.status === "Pago")), [rendas]);
 
   // Receitas habituais: títulos que entraram no mês anterior e ainda não existem neste mês (só no mês corrente). Só sugerem: nada é gravado.
-  const esperadas = useMemo(() => {
-    if (mesFiltro !== currentMonth()) return [];
-    const tit = (r) => (r.descricao || "Outras").toUpperCase();
-    const titsAtuais = rendas.map(tit);
-    const jaTem = { has: (t) => titsAtuais.some(x => tituloMesmo(x, t)) };
-    const ant = shiftMonth(mesFiltro, -1);
-    const grupos = new Map();
-    receitas.filter(r => r.mes === ant && !ehDeposito(r)).forEach(r => {
-      const t = tit(r);
-      if (jaTem.has(t)) return;
-      const g = grupos.get(t) || { titulo: t, descricao: r.descricao, valor: 0, categoria: r.categoria || "", conta: r.contaDestino || "", dia: 0 };
-      g.valor += Number(r.valorRecebido ?? r.valorPrevisto ?? 0);
-      const dd = Number(String(r.dataRecebimento || "").slice(8, 10)) || 0;
-      if (dd > g.dia) g.dia = dd;
-      grupos.set(t, g);
+  const esperadas = useMemo(() => (mesFiltro !== currentMonth() ? [] : esperadasReceitas(receitas, recRec, mesFiltro)), [receitas, recRec, mesFiltro]);
+  // Pílulas do herói: uma por entrada já recebida (título + bolinha da conta); no toque abre a própria receita. Título repetido ganha o dia.
+  const pilulasRec = useMemo(() => {
+    const rec = rendas.filter(r => r.status === "Recebido");
+    const cont = {};
+    rec.forEach(r => { const k = (r.descricao || "").toUpperCase(); cont[k] = (cont[k] || 0) + 1; });
+    return rec.map(r => {
+      const nome = String(r.descricao || "Receita").toLowerCase().replace(/(^|\s)(\S)/g, (m, sp, ch) => sp + ch.toUpperCase());
+      const dup = cont[(r.descricao || "").toUpperCase()] > 1;
+      return { r, label: dup && r.dataRecebimento ? `${nome} ${fmtDate(r.dataRecebimento).slice(0, 5)}` : nome };
     });
-    return [...grupos.values()].filter(g => g.valor > 0).sort((a, b) => b.valor - a.valor);
-  }, [receitas, rendas, mesFiltro]);
+  }, [rendas]);
   const abrirEsperada = (g) => {
     destinoManual.current = true;
     setEditingId(null);
@@ -4301,7 +4406,21 @@ function ReceitasTab({ receitas, onAdd, onRemove, onUpdate, inicioContagem, jump
         ]}
         pct={totals.totalPrevisto > 0 ? (totals.totalRecebido / totals.totalPrevisto) * 100 : 0}
         pctLabel={totals.totalPrevisto > 0 ? `${Math.round((totals.totalRecebido / totals.totalPrevisto) * 100)}% do previsto recebido` : null}
-        faixa={esperadas.length > 0 ? (
+        faixa={(
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+            <span style={{ fontSize: 11, fontWeight: 700, color: "#8B93B5", textTransform: "uppercase", letterSpacing: 0.5 }}>Recebidas</span>
+            {pilulasRec.slice(0, 8).map(({ r, label }) => (
+              <button key={r.id} type="button" className="tap" onClick={() => openEdit(r)} title="Abrir esta receita"
+                style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 700, padding: "4px 11px", borderRadius: 999, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.16)", color: "#E6EBFA", cursor: "pointer", fontFamily: "inherit" }}>
+                <span style={{ width: 8, height: 8, borderRadius: 3, background: fonteColorIn(r.contaDestino), flexShrink: 0 }} />{label}
+              </button>
+            ))}
+            {pilulasRec.length > 8 && <span style={{ fontSize: 12, fontWeight: 700, color: "#8B93B5" }}>+{pilulasRec.length - 8}</span>}
+            {pilulasRec.length === 0 && <span style={{ fontSize: 12, color: "#8B93B5" }}>nenhuma ainda</span>}
+            <button type="button" className="tap" onClick={() => setShowRec(true)} style={{ marginLeft: "auto", fontSize: 11, fontWeight: 700, color: "#B8C2E8", background: "transparent", border: "none", cursor: "pointer", textTransform: "uppercase", letterSpacing: 0.5, fontFamily: "inherit" }}>Recorrentes ›</button>
+          </div>
+          {esperadas.length > 0 && (
           <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
             <span style={{ fontSize: 11, fontWeight: 700, color: "#8B93B5", textTransform: "uppercase", letterSpacing: 0.5 }}>Esperadas</span>
             {esperadas.map(g => (
@@ -4311,10 +4430,13 @@ function ReceitasTab({ receitas, onAdd, onRemove, onUpdate, inicioContagem, jump
               </button>
             ))}
           </div>
-        ) : null}
+          )}
+          </div>
+        )}
         acao={{ label: "Nova", onClick: openNew }}
         onPrev={() => setMesFiltro(m => shiftMonth(m, -1))} onNext={() => setMesFiltro(m => shiftMonth(m, 1))} />
       {showSeletorMesR && <SeletorMes mes={mesFiltro} onPick={setMesFiltro} onClose={() => setShowSeletorMesR(false)} />}
+      {showRec && <RecorrentesReceitasModal lista={recRec} receitas={receitas} mes={mesFiltro} erro={recErro} onAdd={onAddRec} onUpdate={onUpdateRec} onRemove={onRemoveRec} onClose={() => setShowRec(false)} />}
 
       {proximo && <ProximoVencLed info={proximo} onOpen={openEdit} entrada />}
 
@@ -4751,6 +4873,8 @@ function DemandasTab({ demandas, onAdd, onRemove, onUpdate, onStatusChange, jump
   const totalDemandas = demandas.length;
   const listaAtrasadas = useMemo(() => demandas.filter(d => d.status !== "Concluída" && (diasAteVenc(d.prazo) ?? 0) < 0).sort((a, b) => String(a.prazo).localeCompare(String(b.prazo))), [demandas]);
   const atrasadasDem = listaAtrasadas.length;
+  const paradasDem = listaAtrasadas.filter(d => (diasAteVenc(d.prazo) ?? 0) <= -PARADA_DIAS).length;
+  const recentesDem = atrasadasDem - paradasDem;
   const maisUrgenteDem = useMemo(() => {
     const abertas = demandas.filter(d => d.status !== "Concluída" && d.prazo).sort((a, b) => String(a.prazo).localeCompare(String(b.prazo)));
     // Tarefas paradas há 30+ dias não são "a mais urgente": prefere a atrasada mais antiga que ainda é recente, ou a próxima a vencer.
@@ -4790,7 +4914,8 @@ function DemandasTab({ demandas, onAdd, onRemove, onUpdate, onStatusChange, jump
       <TabHero titulo="Tarefas"
         destaque={{ rotulo: "Em aberto", valor: `${resumo.pendente + resumo.andamento} ${(resumo.pendente + resumo.andamento) === 1 ? "tarefa" : "tarefas"}`, cor: (resumo.pendente + resumo.andamento) > 0 ? "#F3F5FA" : "#4FE8BE", sub: `${resumo.pendente} pendentes · ${resumo.andamento} em andamento · ${resumo.concluida} concluídas` }}
         chips={[
-          ...(atrasadasDem > 0 ? [{ t: `${atrasadasDem} ${atrasadasDem === 1 ? "atrasada" : "atrasadas"} · adiar ›`, cor: "#FF8A76", onClick: () => abrirAdiar(false) }] : []),
+          ...(recentesDem > 0 ? [{ t: `${recentesDem} ${recentesDem === 1 ? "atrasada" : "atrasadas"} · adiar ›`, cor: "#FF8A76", onClick: () => abrirAdiar(false) }] : []),
+          ...(paradasDem > 0 ? [{ t: `${paradasDem} ${paradasDem === 1 ? "parada" : "paradas"} há 30+ dias · adiar ›`, cor: "#B8C2E8", onClick: () => abrirAdiar(true) }] : []),
           ...(porPrioridade.length > 1 ? porPrioridade.map(([p, n]) => ({ t: `${p} ${n}`, cor: p === "Alta" ? "#FF8A76" : p === "Média" ? "#FFC53D" : "#4FE8BE" })) : [])
         ]}
         pct={totalDemandas > 0 ? pctConcluido : null}
