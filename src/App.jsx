@@ -742,7 +742,7 @@ function Modal({ title, onClose, children, footer, headerExtra }) {
       >
         <div style={{ padding: "28px 28px 0", flexShrink: 0 }}>
           <div style={{ width: 36, height: 4, borderRadius: 4, background: C.border, margin: "0 auto 16px" }} />
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
             <h3 style={{ margin: 0, fontFamily: "'Fraunces', serif", fontSize: 21, color: C.ink }}>{title}</h3>
             {headerExtra}
             <button onClick={onClose} style={{
@@ -751,7 +751,7 @@ function Modal({ title, onClose, children, footer, headerExtra }) {
             }}><X size={16} /></button>
           </div>
         </div>
-        <div style={{ padding: "0 28px", overflowY: "auto", flex: 1 }}>
+        <div style={{ padding: "14px 28px 0", overflowY: "auto", flex: 1, WebkitMaskImage: "linear-gradient(to bottom, transparent 0, #000 14px)", maskImage: "linear-gradient(to bottom, transparent 0, #000 14px)" }}>
           {children}
         </div>
         {footer && (
@@ -2405,12 +2405,23 @@ function AvisoDesfazer() {
   );
 }
 // Fixo já lançado no mês: por vínculo (fixoId, gravado ao tocar em "Lançar") ou por nome — "Condomínio Via" casa com "Condomínio Via Ipiranga".
+// "Unimed Outubro" lançado em novembro é a conta de outubro, não a de novembro: nome com OUTRO mês não conta como lançado.
+const MESES_NOME = ["janeiro", "fevereiro", "marco", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
+const casaFixo = (nomeCusto, nomeFixo, mes) => {
+  if (nomeCusto === nomeFixo) return true;
+  if (nomeFixo.startsWith(nomeCusto + " ")) return true;
+  if (nomeCusto.startsWith(nomeFixo + " ")) {
+    const m = nomeCusto.slice(nomeFixo.length + 1).split(/\s+/).map(w => MESES_NOME.indexOf(w)).find(i => i >= 0);
+    return m === undefined || m === Number(String(mes).slice(5, 7)) - 1;
+  }
+  return false;
+};
 function fixosPendentes(fixos, custos, mes) {
   const doMes = custos.filter(c => c.mes === mes);
   const nomes = doMes.map(c => normDesc(c.descricao));
   const vinculados = new Set(doMes.map(c => c.fixoId).filter(Boolean));
   const ativos = fixos.filter(f => f.ativo !== false);
-  const jaLancado = (f) => (f.id && vinculados.has(f.id)) || nomes.some(n => tituloMesmo(n, normDesc(f.descricao)));
+  const jaLancado = (f) => (f.id && vinculados.has(f.id)) || nomes.some(n => casaFixo(n, normDesc(f.descricao), mes));
   return { ativos, faltam: ativos.filter(f => !jaLancado(f) && !DISP_FX.includes(dispKey(f, mes))).sort(cmpFixos) };
 }
 
@@ -2740,7 +2751,8 @@ function PixMesCard({ pix, mesLabel, hidden }) {
 // "ALUGUEL APTO 1" → "Aluguel Apto 1" (siglas curtas como "BC" ficam como estão).
 // Siglas de 1–2 letras (BC, CC) ficam em maiúsculas; o resto vira "Título".
 const PEQUENAS_PT = new Set(["de", "da", "do", "e", "em", "a", "o", "as", "os", "no", "na", "ao", "um"]);
-const tituloCaso = (v) => String(v).toLowerCase().replace(/(^|\s)(\S+)/g, (m, sp, w) => sp + ((w.length <= 2 && !PEQUENAS_PT.has(w) && /^[a-zà-ú]+$/.test(w)) ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1)));
+const SIGLAS_PT = new Set(["ipva", "iptu", "cpf", "cnpj", "inss", "irpf", "fgts", "cnh", "pix", "ted", "doc", "mei", "tv", "rg"]);
+const tituloCaso = (v) => String(v).toLowerCase().replace(/(^|\s)(\S+)/g, (m, sp, w) => sp + (((w.length <= 2 && !PEQUENAS_PT.has(w) && /^[a-zà-ú]+$/.test(w)) || SIGLAS_PT.has(w)) ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1)));
 const tituloBonito = (v) => (typeof v === "string" && v === v.toUpperCase() && /[A-ZÀ-Ú]{3}/.test(v)) ? tituloCaso(v) : v;
 
 function TooltipPT({ active, payload, label }) {
@@ -2910,7 +2922,7 @@ function ProximosDiasCard({ itens, onOpenItem, onAcao, onSecundaria = null, hidd
         <div style={{ display: "flex", flexDirection: "column" }}>
           {vis.map((it, i) => (
             <React.Fragment key={it.id}>
-            {(i === 0 || grupoDe(vis[i - 1]) !== grupoDe(it)) && (
+            {!grupoUnico && (i === 0 || grupoDe(vis[i - 1]) !== grupoDe(it)) && (
               <div style={{ fontSize: 10.5, fontWeight: 700, color: grupoDe(it) === "Atrasados" && !grupoUnico ? C.coral : C.faint, textTransform: "uppercase", letterSpacing: 0.6, padding: i === 0 ? "0 0 4px" : "12px 0 4px" }}>{grupoDe(it)}</div>
             )}
             <div className="tap" onClick={() => onOpenItem && onOpenItem(it)}
@@ -2920,7 +2932,7 @@ function ProximosDiasCard({ itens, onOpenItem, onAcao, onSecundaria = null, hidd
                 <div style={{ fontSize: 9.5, fontWeight: 700, color: C.muted, textTransform: "uppercase", letterSpacing: 0.4 }}>{MESES_ABR[Number(String(it.data).slice(5, 7)) - 1]}</div>
               </div>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: C.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.label}</div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: C.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{tituloBonito(it.label)}</div>
                 <div style={{ fontSize: 11.5, color: it.atrasado && !grupoUnico ? C.coral : C.faint, marginTop: 2 }}>
                   <span style={{ color: cor(it.tipo), fontWeight: 700 }}>{it.tipo}</span> · {it.sub}
                 </div>
@@ -2934,7 +2946,7 @@ function ProximosDiasCard({ itens, onOpenItem, onAcao, onSecundaria = null, hidd
               )}
               {onSecundaria && (it.tipo === "Fixo" || it.tipo === "Tarefa") && (
                 <button type="button" className="tap" onClick={(e) => { e.stopPropagation(); onSecundaria(it); }}
-                  style={{ flexShrink: 0, height: 28, borderRadius: 14, border: `1px solid ${C.border}`, background: "transparent", color: it.tipo === "Tarefa" ? C.coral : C.muted, cursor: "pointer", fontSize: 11.5, fontWeight: 700, padding: "0 10px", fontFamily: "inherit" }}>
+                  style={{ flexShrink: 0, height: 28, borderRadius: 14, border: `1px solid ${C.border}`, background: "transparent", color: C.muted, cursor: "pointer", fontSize: 11.5, fontWeight: 700, padding: "0 10px", fontFamily: "inherit" }}>
                   {it.tipo === "Fixo" ? "Dispensar" : "Excluir"}
                 </button>
               )}
@@ -4986,7 +4998,7 @@ function DemandasTab({ demandas, onAdd, onRemove, onUpdate, onStatusChange, jump
         pct={totalDemandas > 0 ? pctConcluido : null}
         pctLabel={totalDemandas > 0 ? `${pctConcluido.toFixed(0)}% concluído` : null}
         faixa={<ReguaDias dias={reguaDias} />}
-        rodapeTexto={maisUrgenteDem ? `Mais urgente: ${maisUrgenteDem.nome} · ${String(maisUrgenteDem.prazo).slice(0, 4) === String(new Date().getFullYear()) ? fmtDate(maisUrgenteDem.prazo).slice(0, 5) : fmtDate(maisUrgenteDem.prazo)}` : "Nenhum prazo em aberto"}
+        rodapeTexto={maisUrgenteDem ? `Mais urgente: ${tituloBonito(maisUrgenteDem.nome)} · ${String(maisUrgenteDem.prazo).slice(0, 4) === String(new Date().getFullYear()) ? fmtDate(maisUrgenteDem.prazo).slice(0, 5) : fmtDate(maisUrgenteDem.prazo)}` : "Nenhum prazo em aberto"}
         rodapeCor={maisUrgenteDem && (diasAteVenc(maisUrgenteDem.prazo) ?? 0) < 0 ? "#FF8A76" : "#B8C2E8"}
         acao={{ label: "Nova", onClick: openNew }} />
 
@@ -5030,7 +5042,7 @@ function DemandasTab({ demandas, onAdd, onRemove, onUpdate, onStatusChange, jump
                     }}>
                       <div style={{ position: "absolute", left: 0, top: 10, bottom: 10, width: 3, borderRadius: 3, background: d.status === "Concluída" ? C.emeraldDeep : (d.prazo && d.prazo < todayISO() ? C.coral : (d.status === "Em Andamento" ? C.lavender : C.amber)) }} />
                       <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
-                        <div style={{ fontWeight: 700, color: C.ink, fontSize: 14.5, marginBottom: 3, flex: 1, minWidth: 0 }}>{d.nome}</div>
+                        <div style={{ fontWeight: 700, color: C.ink, fontSize: 14.5, marginBottom: 3, flex: 1, minWidth: 0 }}>{tituloBonito(d.nome)}</div>
                         <button onClick={async (e) => { e.stopPropagation(); if (await confirmar("Remover esta demanda?", { perigo: true, okLabel: "Remover" })) onRemove(d.id); }} title="Remover" style={{
                           border: "none", background: "transparent", color: C.faint, cursor: "pointer",
                           padding: 2, display: "flex", alignItems: "center", flexShrink: 0, marginRight: 24
