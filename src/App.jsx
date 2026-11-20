@@ -819,7 +819,7 @@ function StatRow({ stats }) {
               color: s.trend.good ? C.emerald : C.coral
             }}>
               {s.trend.pct >= 0 ? <TrendingUp size={10} /> : <TrendingDown size={10} />}
-              {Math.abs(s.trend.pct).toFixed(0)}% vs mês ant.
+              {Math.abs(s.trend.pct).toFixed(0)}% vs mês ant. até hoje
             </div>
           )}
         </div>
@@ -1196,7 +1196,9 @@ export default function App() {
       window.removeEventListener("pageshow", sync);
     };
   }, []);
-  const central = useCentralAvisos(custos, demandas, fixos, 14, diaHoje);
+  const [dispVer, setDispVer] = useState(0);
+  useEffect(() => { const f = () => setDispVer(v => v + 1); DISP_OUVINTES.add(f); return () => { DISP_OUVINTES.delete(f); }; }, []);
+  const central = useCentralAvisos(custos, demandas, fixos, 14, `${diaHoje}|${dispVer}`);
   const sugestoes = useSugestoes(custos, fixos, diaHoje);
   const nAtrasadosApp = central.nUrgentes;
   // Central de avisos: abre por cima da aba atual (sino do topo) ou a partir do Início. null = fechada; { hidden } = valores ocultos?
@@ -1280,6 +1282,18 @@ export default function App() {
   };
   const removeDemanda = async (id) => {
     try { await deleteDoc(doc(db, "demandas", id)); setSaveError(false); } catch (e) { setSaveError(true); }
+  };
+  // Excluir tarefa com "Desfazer": guarda uma cópia e, se você desfizer, recria a tarefa igual.
+  const removerDemandaDesfazer = async (id) => {
+    const d = demandas.find(x => x.id === id);
+    await removeDemanda(id);
+    if (d) { const { id: _id, ...resto } = d; mostrarAviso(`Tarefa "${d.nome}" excluída`, () => addDemanda(resto)); }
+  };
+  const excluirDemandaAlerta = async (id) => {
+    const d = demandas.find(x => x.id === id);
+    if (!d) return;
+    if (!(await confirmar(`Excluir a tarefa "${d.nome}"?`, { perigo: true, okLabel: "Excluir" }))) return;
+    await removerDemandaDesfazer(id);
   };
   const updateDemandaStatus = async (id, status) => {
     // Remember the day a demanda was concluded (only when the person moves it there);
@@ -1518,15 +1532,16 @@ export default function App() {
 
       {centralAberta && (
         <CentralAvisosModal central={central} sugestoes={sugestoes} hidden={centralAberta.hidden} onClose={() => setCentralAberta(null)}
-          onNavigate={goToItem} onConcluirDemanda={(id) => updateDemandaStatus(id, "Concluída")} />
+          onNavigate={goToItem} onConcluirDemanda={(id) => updateDemandaStatus(id, "Concluída")} onExcluirDemanda={excluirDemandaAlerta} />
       )}
+      <AvisoDesfazer />
 
       <main style={{ maxWidth: 1080, margin: "0 auto", padding: "20px 20px 0" }}>
-        {tab === "dashboard" && <DashboardTab key={diaHoje} custos={data.custos} receitas={receitasRenda} depositos={depositosRec} demandas={data.demandas} onNavigate={goToItem} onConcluirDemanda={(id) => updateDemandaStatus(id, "Concluída")} inicioContagem={inicioContagem} fixos={fixos} recRec={recRec} topo={topoApp} onAbrirCentral={(h) => setCentralAberta({ hidden: !!h })} central={central} />}
+        {tab === "dashboard" && <DashboardTab key={diaHoje} custos={data.custos} receitas={receitasRenda} depositos={depositosRec} demandas={data.demandas} onNavigate={goToItem} onConcluirDemanda={(id) => updateDemandaStatus(id, "Concluída")} onExcluirDemanda={excluirDemandaAlerta} dispVer={dispVer} inicioContagem={inicioContagem} fixos={fixos} recRec={recRec} topo={topoApp} onAbrirCentral={(h) => setCentralAberta({ hidden: !!h })} central={central} />}
         {tab === "custos" && <CustosTab key={diaHoje} fixos={fixos} fixosErro={fixosErro} onAddFixo={addFixo} onUpdateFixo={updateFixo} onRemoveFixo={removeFixo} custos={data.custos} onAdd={addCusto} onRemove={removeCusto} onUpdate={updateCusto} jumpTarget={jumpTarget && jumpTarget.tab === "custos" ? jumpTarget : null} onConsumeJump={() => setJumpTarget(null)} />}
         {tab === "receitas" && <ReceitasTab key={diaHoje} recRec={recRec} recErro={recRecErro} onAddRec={addRecRec} onUpdateRec={updateRecRec} onRemoveRec={removeRecRec} receitas={data.receitas} onAdd={addReceita} onRemove={removeReceita} onUpdate={updateReceita} inicioContagem={inicioContagem} jumpTarget={jumpTarget && jumpTarget.tab === "receitas" ? jumpTarget : null} onConsumeJump={() => setJumpTarget(null)} />}
         {tab === "resumo" && <ResumoTab key={diaHoje} custos={data.custos} receitas={receitasRenda} inicioContagem={inicioContagem} onChangeInicio={mudarInicioContagem} />}
-        {tab === "demandas" && <DemandasTab key={diaHoje} demandas={data.demandas} onAdd={addDemanda} onRemove={removeDemanda} onUpdate={updateDemanda} onStatusChange={updateDemandaStatus} jumpTarget={jumpTarget && jumpTarget.tab === "demandas" ? jumpTarget : null} onConsumeJump={() => setJumpTarget(null)} />}
+        {tab === "demandas" && <DemandasTab key={diaHoje} demandas={data.demandas} onAdd={addDemanda} onRemove={removerDemandaDesfazer} onUpdate={updateDemanda} onStatusChange={updateDemandaStatus} jumpTarget={jumpTarget && jumpTarget.tab === "demandas" ? jumpTarget : null} onConsumeJump={() => setJumpTarget(null)} />}
       </main>
 
       <BottomNav tab={tab} setTab={setTab} />
@@ -1917,7 +1932,7 @@ function useCentralAvisos(custos, demandas, fixos, dias = 14, diaHoje = null) {
       if (d === null || d > dias) return;
       const v = Number(f.valorPago || f.valor || 0);
       lista.push({
-        id: `f-${f.id || f.descricao}`, tipo: "Fixo", label: f.descricao, data, fixo: true, valor: v > 0 ? v : null, atrasado: d < 0,
+        id: `f-${f.id || f.descricao}`, tipo: "Fixo", label: f.descricao, data, fixo: true, fixoRef: f, valor: v > 0 ? v : null, atrasado: d < 0,
         sub: d < 0 ? `a lançar · venceu dia ${data.slice(8, 10)}` : d === 0 ? "a lançar · vence hoje" : d === 1 ? "a lançar · vence amanhã" : `a lançar · vence em ${d} dias`
       });
     });
@@ -1946,10 +1961,11 @@ function useSugestoes(custos, fixos, diaHoje = null) {
       porDesc.set(n, e);
     });
     const nomesFixos = new Set((fixos || []).filter(f => f.ativo !== false).map(f => normDesc(f.descricao)));
+    const arrFixos = [...nomesFixos];
     const recorrentes = [], foraPadrao = [];
     porDesc.forEach((e, n) => {
       const hist = prev.filter(m => e.meses[m] > 0);
-      if (!nomesFixos.has(n) && hist.length >= 3) {
+      if (!arrFixos.some(x => tituloMesmo(n, x)) && hist.length >= 3) {
         recorrentes.push({ key: `r|${n}`, label: e.label, n: hist.length, media: hist.reduce((s, m) => s + e.meses[m], 0) / hist.length });
       }
       const atual = e.meses[mes];
@@ -2357,10 +2373,45 @@ function vencimentoDoFixo(f, mes) {
 }
 // Ordem dos fixos: dia do vencimento; no mesmo dia, maior valor primeiro (valor varia por último); depois nome.
 const cmpFixos = (a, b) => (a.dia || 0) - (b.dia || 0) || (Number(b.valor || 0) - Number(a.valor || 0)) || String(a.descricao || "").localeCompare(String(b.descricao || ""));
+// "Dispensar no mês": esconde o fixo dos avisos só neste mês (não apaga nada). Fica guardado neste aparelho.
+const DISP_KEY = "pt_fixos_disp";
+const lerDisp = () => { try { return JSON.parse(localStorage.getItem(DISP_KEY) || "[]"); } catch (e) { return []; } };
+let DISP_FX = lerDisp();
+const DISP_OUVINTES = new Set();
+const dispKey = (f, mes) => `${mes}|${f.id || normDesc(f.descricao)}`;
+const salvarDisp = (l) => { DISP_FX = l.slice(-300); try { localStorage.setItem(DISP_KEY, JSON.stringify(DISP_FX)); } catch (e) { /* sem armazenamento: só não lembra */ } DISP_OUVINTES.forEach(fn => fn()); };
+const desfazerDispensa = (f, mes) => salvarDisp(DISP_FX.filter(x => x !== dispKey(f, mes)));
+// Aviso curto com "Desfazer" (usado ao dispensar um fixo e ao excluir uma tarefa).
+const AVISO_OUVINTES = new Set();
+const mostrarAviso = (texto, desfazer = null) => AVISO_OUVINTES.forEach(fn => fn({ texto, desfazer, id: Date.now() }));
+const dispensarFixo = (f, mes) => {
+  if (!f) return;
+  const k = dispKey(f, mes);
+  if (!DISP_FX.includes(k)) salvarDisp([...DISP_FX, k]);
+  mostrarAviso(`"${f.descricao}" dispensado neste mês`, () => desfazerDispensa(f, mes));
+};
+function AvisoDesfazer() {
+  const [t, setT] = useState(null);
+  useEffect(() => { const f = (x) => setT(x); AVISO_OUVINTES.add(f); return () => { AVISO_OUVINTES.delete(f); }; }, []);
+  useEffect(() => { if (!t) return undefined; const h = setTimeout(() => setT(null), 6000); return () => clearTimeout(h); }, [t]);
+  if (!t) return null;
+  return (
+    <div role="status" style={{ position: "fixed", left: 0, right: 0, bottom: "calc(96px + env(safe-area-inset-bottom))", display: "flex", justifyContent: "center", zIndex: 9000, pointerEvents: "none", padding: "0 16px" }}>
+      <div style={{ pointerEvents: "auto", display: "flex", alignItems: "center", gap: 14, background: C.card, border: `1px solid ${C.border}`, boxShadow: shadowMd, borderRadius: 14, padding: "10px 12px 10px 16px", maxWidth: 520, animation: "fadeInUp .25s ease-out" }}>
+        <span style={{ fontSize: 13, color: C.ink, fontWeight: 600, minWidth: 0 }}>{t.texto}</span>
+        {t.desfazer && <button type="button" className="tap" onClick={() => { const fn = t.desfazer; setT(null); fn(); }} style={{ flexShrink: 0, height: 30, borderRadius: 15, border: `1px solid ${C.emerald}`, background: C.emeraldSoft, color: C.emerald, cursor: "pointer", fontSize: 12, fontWeight: 700, padding: "0 14px", fontFamily: "inherit" }}>Desfazer</button>}
+      </div>
+    </div>
+  );
+}
+// Fixo já lançado no mês: por vínculo (fixoId, gravado ao tocar em "Lançar") ou por nome — "Condomínio Via" casa com "Condomínio Via Ipiranga".
 function fixosPendentes(fixos, custos, mes) {
-  const lancados = new Set(custos.filter(c => c.mes === mes).map(c => normDesc(c.descricao)));
+  const doMes = custos.filter(c => c.mes === mes);
+  const nomes = doMes.map(c => normDesc(c.descricao));
+  const vinculados = new Set(doMes.map(c => c.fixoId).filter(Boolean));
   const ativos = fixos.filter(f => f.ativo !== false);
-  return { ativos, faltam: ativos.filter(f => !lancados.has(normDesc(f.descricao))).sort(cmpFixos) };
+  const jaLancado = (f) => (f.id && vinculados.has(f.id)) || nomes.some(n => tituloMesmo(n, normDesc(f.descricao)));
+  return { ativos, faltam: ativos.filter(f => !jaLancado(f) && !DISP_FX.includes(dispKey(f, mes))).sort(cmpFixos) };
 }
 
 function FixosAVencerCard({ itens, onOpen }) {
@@ -2687,7 +2738,10 @@ function PixMesCard({ pix, mesLabel, hidden }) {
 }
 
 // "ALUGUEL APTO 1" → "Aluguel Apto 1" (siglas curtas como "BC" ficam como estão).
-const tituloBonito = (v) => (typeof v === "string" && v === v.toUpperCase() && /[A-ZÀ-Ú]{3}/.test(v)) ? v.toLowerCase().replace(/(^|\s)\S/g, m => m.toUpperCase()) : v;
+// Siglas de 1–2 letras (BC, CC) ficam em maiúsculas; o resto vira "Título".
+const PEQUENAS_PT = new Set(["de", "da", "do", "e", "em", "a", "o", "as", "os", "no", "na", "ao", "um"]);
+const tituloCaso = (v) => String(v).toLowerCase().replace(/(^|\s)(\S+)/g, (m, sp, w) => sp + ((w.length <= 2 && !PEQUENAS_PT.has(w) && /^[a-zà-ú]+$/.test(w)) ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1)));
+const tituloBonito = (v) => (typeof v === "string" && v === v.toUpperCase() && /[A-ZÀ-Ú]{3}/.test(v)) ? tituloCaso(v) : v;
 
 function TooltipPT({ active, payload, label }) {
   if (!active || !payload || payload.length === 0) return null;
@@ -2835,12 +2889,13 @@ function ReguaDias({ dias }) {
   );
 }
 
-function ProximosDiasCard({ itens, onOpenItem, onAcao, hidden, central = false, grupoUnico = null, vazioTexto = null }) {
+function ProximosDiasCard({ itens, onOpenItem, onAcao, onSecundaria = null, hidden, central = false, grupoUnico = null, vazioTexto = null }) {
   const [aberto, setAberto] = useState(false);
   const limite = central ? 999 : 3;
   const vis = aberto ? itens : itens.slice(0, limite);
   const cor = (t) => t === "Fixo" ? C.amber : t === "Tarefa" ? C.emerald : C.lavender;
-  const grupoDe = (it) => { if (grupoUnico) return grupoUnico; const d = diasAteVenc(it.data); return d < 0 ? (central ? "Atrasados" : "Já venceu") : d === 0 ? "Hoje" : d === 1 ? "Amanhã" : d <= 7 ? "Esta semana" : (central ? "Semana seguinte" : "Depois"); };
+  const fimSemana = (7 - new Date().getDay()) % 7; // dias até o domingo (semana do calendário)
+  const grupoDe = (it) => { if (grupoUnico) return grupoUnico; const d = diasAteVenc(it.data); return d < 0 ? (central ? "Atrasados" : "Já venceu") : d === 0 ? "Hoje" : d === 1 ? "Amanhã" : d <= fimSemana ? "Esta semana" : d <= fimSemana + 7 ? "Próxima semana" : "Depois"; };
   return (
     <div className={central ? undefined : "in"} style={central ? { padding: 0 } : { background: C.card, boxShadow: shadowSm, borderRadius: 18, padding: "16px 18px", marginBottom: 20 }}>
       {!central && <div className={itens.length > limite ? "tap" : undefined} onClick={itens.length > limite ? () => setAberto(a => !a) : undefined} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: itens.length ? 10 : 6, cursor: itens.length > limite ? "pointer" : "default" }}>
@@ -2877,13 +2932,19 @@ function ProximosDiasCard({ itens, onOpenItem, onAcao, hidden, central = false, 
                   {it.tipo === "Fixo" ? "Lançar" : it.tipo === "Custo" ? "Pagar" : "Concluir"}
                 </button>
               )}
+              {onSecundaria && (it.tipo === "Fixo" || it.tipo === "Tarefa") && (
+                <button type="button" className="tap" onClick={(e) => { e.stopPropagation(); onSecundaria(it); }}
+                  style={{ flexShrink: 0, height: 28, borderRadius: 14, border: `1px solid ${C.border}`, background: "transparent", color: it.tipo === "Tarefa" ? C.coral : C.muted, cursor: "pointer", fontSize: 11.5, fontWeight: 700, padding: "0 10px", fontFamily: "inherit" }}>
+                  {it.tipo === "Fixo" ? "Dispensar" : "Excluir"}
+                </button>
+              )}
             </div>
             </React.Fragment>
           ))}
         </div>
       )}
       {itens.length > limite && (
-        <button type="button" onClick={() => setAberto(a => !a)} style={{ marginTop: 8, border: "none", background: "transparent", color: C.muted, cursor: "pointer", fontSize: 12, fontWeight: 700, padding: "4px 2px" }}>
+        <button type="button" className="tap" onClick={() => setAberto(a => !a)} style={{ marginTop: 8, minHeight: 36, border: `1px solid ${C.border}`, borderRadius: 18, background: "transparent", color: C.inkSoft, cursor: "pointer", fontSize: 12, fontWeight: 700, padding: "4px 14px", fontFamily: "inherit" }}>
           {aberto ? "Ver menos" : `+${itens.length - limite} mais`}
         </button>
       )}
@@ -2893,7 +2954,7 @@ function ProximosDiasCard({ itens, onOpenItem, onAcao, hidden, central = false, 
 
 // Central de avisos: atrasados e o que vence nos próximos 14 dias (+ tarefas paradas há muito tempo, recolhidas).
 // Fica no nível do App para abrir por cima de qualquer aba, sem trocar de aba.
-function CentralAvisosModal({ central, sugestoes = null, hidden = false, onClose, onNavigate, onConcluirDemanda }) {
+function CentralAvisosModal({ central, sugestoes = null, hidden = false, onClose, onNavigate, onConcluirDemanda, onExcluirDemanda }) {
   const [paradosAberto, setParadosAberto] = useState(false);
   const [sugAberto, setSugAberto] = useState(false);
   const [ign, setIgn] = useState(lerSugIgn);
@@ -2906,6 +2967,7 @@ function CentralAvisosModal({ central, sugestoes = null, hidden = false, onClose
     <Modal title="Central de avisos" onClose={onClose}>
       <div style={{ fontSize: 11.5, color: C.faint, marginBottom: 10 }}>Atrasados e tudo o que vence nos próximos 14 dias.</div>
       <ProximosDiasCard central itens={central.itens} hidden={hidden}
+        onSecundaria={(it) => it.tipo === "Fixo" ? dispensarFixo(it.fixoRef, currentMonth()) : (onExcluirDemanda && onExcluirDemanda(it.rawId))}
         vazioTexto={central.parados && central.parados.length > 0 ? "Nada urgente nem agendado pelos próximos 14 dias ✓" : null}
         onAcao={async (it) => {
           if (it.tipo === "Fixo") { onClose(); onNavigate && onNavigate("custos", null, { lancarFixo: it.label, mes: currentMonth() }); }
@@ -2926,6 +2988,7 @@ function CentralAvisosModal({ central, sugestoes = null, hidden = false, onClose
           <div style={{ fontSize: 11.5, color: C.faint, margin: "2px 0 6px" }}>Não entram na contagem de avisos. Conclua, adie ou apague quando puder.</div>
           {paradosAberto && <>
             <ProximosDiasCard central grupoUnico="Paradas" itens={central.parados} hidden={hidden}
+              onSecundaria={(it) => onExcluirDemanda && onExcluirDemanda(it.rawId)}
               onAcao={async (it) => { if (onConcluirDemanda && await confirmar(`Marcar "${it.label}" como Concluída?`, { okLabel: "Concluir" })) onConcluirDemanda(it.rawId); }}
               onOpenItem={(it) => { onClose(); onNavigate && onNavigate(it.tab, it.rawId); }} />
             <button type="button" className="tap" onClick={() => { onClose(); onNavigate && onNavigate("demandas", null, { adiarParadas: true }); }}
@@ -2995,7 +3058,7 @@ function ObsLinha({ nome, detalhe = null, valor = null, hidden = false, acao = n
   );
 }
 
-function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, onConcluirDemanda, inicioContagem, fixos = [], recRec = [], topo = null, onAbrirCentral, central = { itens: [], parados: [], nUrgentes: 0 } }) {
+function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, onConcluirDemanda, onExcluirDemanda, dispVer = 0, inicioContagem, fixos = [], recRec = [], topo = null, onAbrirCentral, central = { itens: [], parados: [], nUrgentes: 0 } }) {
   const [hidden, setHidden] = useState(false);
   const [saldoAberto, setSaldoAberto] = useState(false);
   const [analise, setAnalise] = useState("evolucao");
@@ -3014,7 +3077,7 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
     if (!ehMesCorrente || fixos.length === 0) return [];
     const limite = new Date().getDate() + 7;
     return fixosPendentes(fixos, custos, mesAtual).faltam.filter(f => (f.dia || 0) <= limite);
-  }, [fixos, custos, mesAtual, ehMesCorrente]);
+  }, [fixos, custos, mesAtual, ehMesCorrente, dispVer]);
   const semLancamentos = ehMesCorrente && !custos.some(c => c.mes === mesAtual) && !receitas.some(r => r.mes === mesAtual);
   const ano = parseInt(mesAtual.split("-")[0], 10);
   const mesNumVisto = parseInt(mesAtual.split("-")[1], 10);
@@ -3203,7 +3266,7 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
   }, [custos, receitas, mesAtual]);
   // Fixos ainda não lançados neste mês entram na projeção como ESTIMATIVA (usa o valor pago esperado, se houver).
   // Fixos sem valor (ex.: Unimed, Gibson) ficam de fora e são avisados.
-  const fixosFaltam = useMemo(() => ehMesCorrente ? fixosPendentes(fixos, custos, mesAtual).faltam : [], [fixos, custos, mesAtual, ehMesCorrente]);
+  const fixosFaltam = useMemo(() => ehMesCorrente ? fixosPendentes(fixos, custos, mesAtual).faltam : [], [fixos, custos, mesAtual, ehMesCorrente, dispVer]);
   // Sem valor cadastrado, a estimativa usa o lançamento do mês anterior com o mesmo nome (é o mesmo valor que o "Lançar" sugere).
   const valorAnteriorFixo = (f) => { const a = custos.find(c => c.mes === mesAnterior && normDesc(c.descricao) === normDesc(f.descricao)); return a ? Number(a.valorPrevisto || a.valorPago || 0) : 0; };
   const valorFixoCad = (f) => Number(f.valorPago || f.valor || 0);
@@ -3236,7 +3299,7 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
       const data = vencimentoDoFixo(f, mesAtual);
       const d = diasAteVenc(data);
       lista.push({
-        id: `f-${f.id || f.descricao}`, tipo: "Fixo", label: f.descricao, data, fixo: true, valor: valorFixo(f) > 0 ? valorFixo(f) : null,
+        id: `f-${f.id || f.descricao}`, tipo: "Fixo", label: f.descricao, data, fixo: true, fixoRef: f, valor: valorFixo(f) > 0 ? valorFixo(f) : null,
         sub: d < 0 ? `a lançar · venceu dia ${data.slice(8, 10)}` : d === 0 ? "a lançar · vence hoje" : d === 1 ? "a lançar · vence amanhã" : `a lançar · vence em ${d} dias`
       });
     });
@@ -3340,7 +3403,7 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
           {receitasEstTotal > 0 && (
             <ObsBloco titulo="Receitas esperadas" total={receitasEstTotal} hidden={hidden} nota="Receitas habituais (sua lista de recorrentes ou, sem lista, as do mês anterior) que ainda não foram lançadas neste mês, contadas como entrada.">
               {receitasEst.itens.map(i => (
-                <ObsLinha key={i.titulo} hidden={hidden} nome={i.titulo.toLowerCase().replace(/(^|\s)(\S)/g, (m, sp, ch) => sp + ch.toUpperCase())} detalhe="valor do mês anterior" valor={i.valor} />
+                <ObsLinha key={i.titulo} hidden={hidden} nome={tituloCaso(i.titulo)} detalhe="valor do mês anterior" valor={i.valor} />
               ))}
             </ObsBloco>
           )}
@@ -3389,7 +3452,7 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
         curva={curva}
         atencao={{ n: central.nUrgentes, parados: (central.parados || []).length, onOpen: () => onAbrirCentral && onAbrirCentral(hidden), pulsar: pulsarAtencao }}
         situacao={!ehMesCorrente ? [] : [
-          ...(ritmo.disponivel ? [{ t: `Ritmo ${ritmo.pct.toFixed(0)}% do normal`, cor: Math.round(ritmo.pct) > 150 ? "#FF8A76" : Math.round(ritmo.pct) > 100 ? "#FFC53D" : "#4FE8BE" }] : []),
+          ...(ritmo.disponivel ? [{ t: `Ritmo ${ritmo.pct.toFixed(0)}% do normal ›`, onClick: () => { try { const el = document.getElementById("ritmo-card"); if (el) el.scrollIntoView({ behavior: "smooth", block: "center" }); } catch (e) { /* sem rolagem */ } }, cor: Math.round(ritmo.pct) > 150 ? "#FF8A76" : Math.round(ritmo.pct) > 100 ? "#FFC53D" : "#4FE8BE" }] : []),
           ...(fixosEst > 0 ? [{ t: `Faltam ${fmtBRL(fixosEst)} em fixos ›`, cor: "#B8BFDB", onClick: () => onNavigate && onNavigate("custos", null, { abrirFixos: true }) }] : []),
           ...(projQuitado || !projTemDados ? [] : [{ t: `Fecha em ${fmtBRL(saldoEstimado)} (estimativa)`, cor: saldoEstimado < 0 ? "#FF8A76" : "#4FE8BE" }])
         ]}
@@ -3413,6 +3476,7 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
       ]} />
 
       {ehMesCorrente && <ProximosDiasCard itens={proximosDias} hidden={hidden}
+        onSecundaria={(it) => it.tipo === "Fixo" ? dispensarFixo(it.fixoRef, mesAtual) : (onExcluirDemanda && onExcluirDemanda(it.rawId))}
         onAcao={async (it) => {
           if (it.tipo === "Fixo") onNavigate && onNavigate("custos", null, { lancarFixo: it.label, mes: mesAtual });
           else if (it.tipo === "Custo") onNavigate && onNavigate("custos", it.rawId, { pagar: true });
@@ -3451,7 +3515,7 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
             </button>
           )}
         </div>
-        <div style={{ marginTop: 18 }}>
+        <div id="ritmo-card" style={{ marginTop: 18 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
             <span style={{ fontWeight: 700, fontSize: 12.5, color: C.ink }}>Ritmo do mês</span>
             {ritmo.disponivel && (
@@ -3833,7 +3897,7 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
   const formDeCusto = (c) => ({
     mes: c.mes, ano: c.ano, descricao: c.descricao, vencimento: c.vencimento || "",
     dataPagamento: c.dataPagamento || "", valorPrevisto: fmtValorInput(c.valorPrevisto),
-    valorPago: fmtValorInput(c.valorPago), fonte: c.fonte, status: c.status, obs: c.obs || ""
+    valorPago: fmtValorInput(c.valorPago), fonte: c.fonte, status: c.status, obs: c.obs || "", fixoId: c.fixoId || ""
   });
   const openEdit = (c) => {
     setEditingId(c.id);
@@ -3851,7 +3915,7 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
     const ant = custos.find(c => c.mes === mesAnt && normDesc(c.descricao) === normDesc(fx.descricao));
     const valorBase = fx.valor || (ant ? Number(ant.valorPrevisto || ant.valorPago || 0) : 0);
     const pagoEsp = fx.valorPago || valorBase || 0;
-    setForm({ ...blankCusto(mf), descricao: fx.descricao, vencimento: vencimentoDoFixo(fx, mf),
+    setForm({ ...blankCusto(mf), fixoId: fx.id || "", descricao: fx.descricao, vencimento: vencimentoDoFixo(fx, mf),
       valorPrevisto: valorBase ? fmtValorInput(valorBase) : "", fonte: fx.fonte || (ant && ant.fonte) || FONTES[0],
       ...(pagoHoje ? { status: "Pago", dataPagamento: todayISO(), valorPago: pagoEsp ? fmtValorInput(pagoEsp) : "" } : {}) });
     setShowForm(true);
@@ -4279,7 +4343,7 @@ function ReceitasTab({ receitas, onAdd, onRemove, onUpdate, inicioContagem, jump
     const cont = {};
     rec.forEach(r => { const k = (r.descricao || "").toUpperCase(); cont[k] = (cont[k] || 0) + 1; });
     return rec.map(r => {
-      const nome = String(r.descricao || "Receita").toLowerCase().replace(/(^|\s)(\S)/g, (m, sp, ch) => sp + ch.toUpperCase());
+      const nome = tituloCaso(r.descricao || "Receita");
       const dup = cont[(r.descricao || "").toUpperCase()] > 1;
       return { r, label: dup && r.dataRecebimento ? `${nome} ${fmtDate(r.dataRecebimento).slice(0, 5)}` : nome };
     });
@@ -4426,7 +4490,7 @@ function ReceitasTab({ receitas, onAdd, onRemove, onUpdate, inicioContagem, jump
             {esperadas.map(g => (
               <button key={g.titulo} type="button" className="tap" onClick={() => abrirEsperada(g)} title="Abrir formulário preenchido"
                 style={{ fontSize: 12, fontWeight: 700, padding: "4px 11px", borderRadius: 999, background: "rgba(255,197,61,0.1)", border: "1px solid rgba(255,197,61,0.4)", color: "#FFC53D", cursor: "pointer", fontFamily: "inherit" }}>
-                {g.titulo.toLowerCase().replace(/(^|\s)(\S)/g, (m, sp, ch) => sp + ch.toUpperCase())} · {fmtBRL(g.valor)} ›
+                {tituloCaso(g.titulo)} · {fmtBRL(g.valor)} ›
               </button>
             ))}
           </div>
@@ -4864,6 +4928,7 @@ function DemandasTab({ demandas, onAdd, onRemove, onUpdate, onStatusChange, jump
     }
   };
 
+  const [paradasAberto, setParadasAberto] = useState(false);
   const PRIORIDADE_COLOR = { "Alta": C.coral, "Média": C.amber, "Baixa": C.emeraldDeep };
   const porPrioridade = useMemo(() => {
     const map = { "Alta": 0, "Média": 0, "Baixa": 0 };
@@ -4938,22 +5003,27 @@ function DemandasTab({ demandas, onAdd, onRemove, onUpdate, onStatusChange, jump
             const ord = { "Alta": 0, "Média": 1, "Baixa": 2 };
             return (ord[a.prioridade] ?? 1) - (ord[b.prioridade] ?? 1) || (a.nome || "").localeCompare(b.nome || "");
           });
+          // Pendente: as paradas há 30+ dias ficam recolhidas no fim da coluna (como na Central de avisos).
+          const ehParadaD = (d) => col.status === "Pendente" && d.prazo && (diasAteVenc(d.prazo) ?? 0) <= -PARADA_DIAS;
+          const paradasCol = items.filter(ehParadaD);
+          const ativasCol = items.filter(d => !ehParadaD(d));
+          const itensVis = paradasCol.length > 0 && !paradasAberto ? ativasCol : [...ativasCol, ...paradasCol];
           return (
             <div key={col.status}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, padding: "0 2px" }}>
+              <div style={{ position: "sticky", top: 0, zIndex: 6, background: C.page, display: "flex", alignItems: "center", gap: 8, marginBottom: 6, padding: "8px 2px" }}>
                 <span style={{ fontWeight: 700, fontSize: 13.5, color: C.pageInk, textTransform: "uppercase", letterSpacing: 0.4 }}>{col.label}</span>
                 <span style={{
                   fontSize: 11, fontWeight: 700, color: C.pageMuted, background: C.pageChip,
                   borderRadius: 10, padding: "1px 8px"
                 }}>{col.count}</span>
               </div>
-              {items.length === 0 ? (
+              {itensVis.length === 0 && paradasCol.length === 0 ? (
                 <div style={{ border: `1px dashed ${C.border}`, borderRadius: 14, padding: "12px 14px", textAlign: "center", color: C.faint, fontSize: 12.5 }}>
                   Nada aqui.
                 </div>
               ) : (
                 <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                  {items.map(d => (
+                  {itensVis.map(d => (
                     <div key={d.id} className="tap in" onClick={() => openEdit(d)} style={{
                       background: C.card, boxShadow: shadowSm, borderRadius: 14, padding: "13px 14px",
                       position: "relative", cursor: "pointer"
@@ -4998,12 +5068,19 @@ function DemandasTab({ demandas, onAdd, onRemove, onUpdate, onStatusChange, jump
                             display: "flex", alignItems: "center", gap: 5, border: `1px solid ${C.border}`, background: "transparent",
                             color: C.muted, borderRadius: 9, padding: "5px 10px", fontSize: 11.5, fontWeight: 700, cursor: "pointer"
                           }}>
-                            Adiar 7 dias
+                            <Clock size={12} /> +7 dias
                           </button>
                         )}
                       </div>}
                     </div>
                   ))}
+                  {paradasCol.length > 0 && (
+                    <button type="button" className="tap" onClick={() => setParadasAberto(a => !a)} aria-expanded={paradasAberto}
+                      style={{ display: "flex", alignItems: "center", gap: 8, border: `1px dashed ${C.border}`, background: "transparent", color: C.muted, borderRadius: 14, padding: "11px 14px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}>
+                      <span style={{ flex: 1 }}>{paradasAberto ? "Recolher" : "Paradas há"} {paradasAberto ? "paradas" : `${PARADA_DIAS}+ dias`} ({paradasCol.length})</span>
+                      <ChevronDown size={16} style={{ transform: paradasAberto ? "rotate(180deg)" : "none", transition: "transform .2s ease" }} />
+                    </button>
+                  )}
                 </div>
               )}
             </div>
