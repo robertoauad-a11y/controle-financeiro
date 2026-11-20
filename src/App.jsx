@@ -2750,9 +2750,9 @@ function PixMesCard({ pix, mesLabel, hidden }) {
 
 // "ALUGUEL APTO 1" → "Aluguel Apto 1" (siglas curtas como "BC" ficam como estão).
 // Siglas de 1–2 letras (BC, CC) ficam em maiúsculas; o resto vira "Título".
-const PEQUENAS_PT = new Set(["de", "da", "do", "e", "em", "a", "o", "as", "os", "no", "na", "ao", "um"]);
-const SIGLAS_PT = new Set(["ipva", "iptu", "cpf", "cnpj", "inss", "irpf", "fgts", "cnh", "pix", "ted", "doc", "mei", "tv", "rg"]);
-const tituloCaso = (v) => String(v).toLowerCase().replace(/(^|\s)(\S+)/g, (m, sp, w) => sp + (((w.length <= 2 && !PEQUENAS_PT.has(w) && /^[a-zà-ú]+$/.test(w)) || SIGLAS_PT.has(w)) ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1)));
+const PEQUENAS_PT = new Set(["de", "da", "do", "das", "dos", "e", "em", "a", "o", "as", "os", "no", "na", "ao", "um"]);
+const SIGLAS_PT = new Set(["ipva", "iptu", "cpf", "cnpj", "inss", "irpf", "fgts", "cnh", "pix", "ted", "doc", "mei", "tv", "rg", "psi"]);
+const tituloCaso = (v) => String(v).toLowerCase().replace(/(^|\s)(\S+)/g, (m, sp, w, pos) => sp + (((w.length <= 2 && !PEQUENAS_PT.has(w) && /^[a-zà-ú]+$/.test(w)) || SIGLAS_PT.has(w)) ? w.toUpperCase() : (PEQUENAS_PT.has(w) && pos > 0) ? w : w.charAt(0).toUpperCase() + w.slice(1)));
 const tituloBonito = (v) => (typeof v === "string" && v === v.toUpperCase() && /[A-ZÀ-Ú]{3}/.test(v)) ? tituloCaso(v) : v;
 
 function TooltipPT({ active, payload, label }) {
@@ -2969,6 +2969,11 @@ function ProximosDiasCard({ itens, onOpenItem, onAcao, onSecundaria = null, hidd
 function CentralAvisosModal({ central, sugestoes = null, hidden = false, onClose, onNavigate, onConcluirDemanda, onExcluirDemanda }) {
   const [paradosAberto, setParadosAberto] = useState(false);
   const [sugAberto, setSugAberto] = useState(false);
+  // Ao abrir uma seção no fim da janela, rola até ela: o conteúdo novo nascia abaixo da borda e parecia que "não abriu".
+  const parRef = useRef(null);
+  const sugRef = useRef(null);
+  useEffect(() => { if (!paradosAberto) return undefined; const h = setTimeout(() => { try { if (parRef.current) parRef.current.scrollIntoView({ behavior: "smooth", block: "nearest" }); } catch (e) { /* sem rolagem */ } }, 80); return () => clearTimeout(h); }, [paradosAberto]);
+  useEffect(() => { if (!sugAberto) return undefined; const h = setTimeout(() => { try { if (sugRef.current) sugRef.current.scrollIntoView({ behavior: "smooth", block: "nearest" }); } catch (e) { /* sem rolagem */ } }, 80); return () => clearTimeout(h); }, [sugAberto]);
   const [ign, setIgn] = useState(lerSugIgn);
   const ignorar = (k) => setIgn(l => { const n = [...l, k].slice(-200); try { localStorage.setItem(SUG_KEY, JSON.stringify(n)); } catch (e) { /* sem armazenamento: só não lembra */ } return n; });
   const sugRec = sugestoes ? sugestoes.recorrentes.filter(x => !ign.includes(x.key)).slice(0, 6) : [];
@@ -2988,7 +2993,7 @@ function CentralAvisosModal({ central, sugestoes = null, hidden = false, onClose
         }}
         onOpenItem={(it) => { onClose(); it.fixo ? (onNavigate && onNavigate("custos", null, { abrirFixos: true })) : (onNavigate && onNavigate(it.tab, it.rawId)); }} />
       {central.parados && central.parados.length > 0 && (
-        <div style={{ marginTop: central.itens.length ? 18 : 12, paddingTop: 12, borderTop: central.itens.length ? `1px solid ${C.border}` : "none" }}>
+        <div ref={parRef} style={{ marginTop: central.itens.length ? 18 : 12, paddingTop: 12, borderTop: central.itens.length ? `1px solid ${C.border}` : "none" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <button type="button" className="tap" onClick={() => setParadosAberto(a => !a)} aria-expanded={paradosAberto}
               style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: 8, border: "none", background: "transparent", color: C.ink, cursor: "pointer", fontFamily: "inherit", padding: "4px 0", textAlign: "left" }}>
@@ -3011,7 +3016,7 @@ function CentralAvisosModal({ central, sugestoes = null, hidden = false, onClose
         </div>
       )}
       {nSug > 0 && (
-        <div style={{ marginTop: 18, paddingTop: 12, borderTop: `1px solid ${C.border}` }}>
+        <div ref={sugRef} style={{ marginTop: 18, paddingTop: 12, borderTop: `1px solid ${C.border}`, paddingBottom: 6 }}>
           <button type="button" className="tap" onClick={() => setSugAberto(a => !a)} aria-expanded={sugAberto}
             style={{ width: "100%", display: "flex", alignItems: "center", gap: 8, border: "none", background: "transparent", color: C.ink, cursor: "pointer", fontFamily: "inherit", padding: "4px 0", textAlign: "left" }}>
             <span style={{ fontWeight: 700, fontSize: 12.5, textTransform: "uppercase", letterSpacing: 0.4 }}>Sugestões do app</span>
@@ -3465,7 +3470,7 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
         atencao={{ n: central.nUrgentes, parados: (central.parados || []).length, onOpen: () => onAbrirCentral && onAbrirCentral(hidden), pulsar: pulsarAtencao }}
         situacao={!ehMesCorrente ? [] : [
           ...(ritmo.disponivel ? [{ t: `Ritmo ${ritmo.pct.toFixed(0)}% do normal ›`, onClick: () => { try { const el = document.getElementById("ritmo-card"); if (el) el.scrollIntoView({ behavior: "smooth", block: "center" }); } catch (e) { /* sem rolagem */ } }, cor: Math.round(ritmo.pct) > 150 ? "#FF8A76" : Math.round(ritmo.pct) > 100 ? "#FFC53D" : "#4FE8BE" }] : []),
-          ...(fixosEst > 0 ? [{ t: `Faltam ${fmtBRL(fixosEst)} em fixos ›`, cor: "#B8BFDB", onClick: () => onNavigate && onNavigate("custos", null, { abrirFixos: true }) }] : []),
+          ...(fixosEst > 0 ? [{ t: `Faltam ${fmtBRL(fixosEst)} em fixos${fixosSemValor.length > 0 ? ` · ${fixosSemValor.length} sem valor` : ""} ›`, cor: "#B8BFDB", onClick: () => onNavigate && onNavigate("custos", null, { abrirFixos: true }) }] : []),
           ...(projQuitado || !projTemDados ? [] : [{ t: `Fecha em ${fmtBRL(saldoEstimado)} (estimativa)`, cor: saldoEstimado < 0 ? "#FF8A76" : "#4FE8BE" }])
         ]}
         porFonte={saldoPorFonte}
