@@ -1933,7 +1933,7 @@ function useCentralAvisos(custos, demandas, fixos, dias = 14, diaHoje = null) {
       const v = Number(f.valorPago || f.valor || 0);
       lista.push({
         id: `f-${f.id || f.descricao}`, tipo: "Fixo", label: f.descricao, data, fixo: true, fixoRef: f, valor: v > 0 ? v : null, atrasado: d < 0,
-        sub: d < 0 ? `a lançar · venceu dia ${data.slice(8, 10)}` : d === 0 ? "a lançar · vence hoje" : d === 1 ? "a lançar · vence amanhã" : `a lançar · vence em ${d} dias`
+        sub: d < 0 ? `a lançar · venceu há ${-d} ${-d === 1 ? "dia" : "dias"}` : d === 0 ? "a lançar · vence hoje" : d === 1 ? "a lançar · vence amanhã" : `a lançar · vence em ${d} dias`
       });
     });
     lista.sort((a, b) => String(a.data).localeCompare(String(b.data)) || String(a.label).localeCompare(String(b.label)));
@@ -2405,6 +2405,12 @@ function AvisoDesfazer() {
   );
 }
 // Fixo já lançado no mês: por vínculo (fixoId, gravado ao tocar em "Lançar") ou por nome — "Condomínio Via" casa com "Condomínio Via Ipiranga".
+// Custo Pendente sem valor: a projeção usa o lançamento do mês anterior com o mesmo nome (a mesma ideia dos fixos sem valor).
+const estimativaSemValor = (c, custos, mesAnt) => {
+  const n = normDesc(c.descricao);
+  const a = custos.find(x => x.mes === mesAnt && casaFixo(normDesc(x.descricao), n, mesAnt));
+  return a ? Number(a.valorPago || a.valorPrevisto || 0) : 0;
+};
 // "Unimed Outubro" lançado em novembro é a conta de outubro, não a de novembro: nome com OUTRO mês não conta como lançado.
 const MESES_NOME = ["janeiro", "fevereiro", "marco", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
 const casaFixo = (nomeCusto, nomeFixo, mes) => {
@@ -3275,12 +3281,12 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
     const cs = custos.filter(c => c.mes === mesAtual);
     const rs = receitas.filter(r => r.mes === mesAtual);
     const pago = cs.reduce((t, c) => t + Number(c.valorPago || 0), 0);
-    const aPagar = cs.filter(c => c.status !== "Pago").reduce((t, c) => t + Number(c.valorPrevisto || 0), 0);
+    const aPagar = cs.filter(c => c.status !== "Pago").reduce((t, c) => t + (Number(c.valorPrevisto || 0) > 0 ? Number(c.valorPrevisto) : estimativaSemValor(c, custos, mesAnterior)), 0);
     const recebido = rs.reduce((t, r) => t + Number(r.valorRecebido || 0), 0);
     const aReceber = rs.filter(r => r.status !== "Recebido").reduce((t, r) => t + Math.max(0, Number(r.valorPrevisto || 0) - Number(r.valorRecebido || 0)), 0);
     const previstoRec = rs.reduce((t, r) => t + Number(r.valorPrevisto || 0), 0);
     return { pago, aPagar, recebido, aReceber, previstoRec, saldoProjetado: (recebido + aReceber) - (pago + aPagar) };
-  }, [custos, receitas, mesAtual]);
+  }, [custos, receitas, mesAtual, mesAnterior]);
   // Fixos ainda não lançados neste mês entram na projeção como ESTIMATIVA (usa o valor pago esperado, se houver).
   // Fixos sem valor (ex.: Unimed, Gibson) ficam de fora e são avisados.
   const fixosFaltam = useMemo(() => ehMesCorrente ? fixosPendentes(fixos, custos, mesAtual).faltam : [], [fixos, custos, mesAtual, ehMesCorrente, dispVer]);
@@ -3317,16 +3323,19 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
       const d = diasAteVenc(data);
       lista.push({
         id: `f-${f.id || f.descricao}`, tipo: "Fixo", label: f.descricao, data, fixo: true, fixoRef: f, valor: valorFixo(f) > 0 ? valorFixo(f) : null,
-        sub: d < 0 ? `a lançar · venceu dia ${data.slice(8, 10)}` : d === 0 ? "a lançar · vence hoje" : d === 1 ? "a lançar · vence amanhã" : `a lançar · vence em ${d} dias`
+        sub: d < 0 ? `a lançar · venceu há ${-d} ${-d === 1 ? "dia" : "dias"}` : d === 0 ? "a lançar · vence hoje" : d === 1 ? "a lançar · vence amanhã" : `a lançar · vence em ${d} dias`
       });
     });
     return lista.sort((a, b) => String(a.data).localeCompare(String(b.data)) || String(a.label).localeCompare(String(b.label)));
   }, [proximos30, fixosFaltam, mesAtual]);
 
+  // No mês corrente, compara até o MESMO DIA dos dois meses (mês anterior inteiro x mês atual parcial enganava: "−67%" era só mês incompleto).
+  const diaCorteComp = ehMesCorrente ? Number(todayISO().slice(8, 10)) : null;
   const comparativo = useMemo(() => {
-    const soma = (mes, fonte) => custos.filter(c => c.mes === mes && contaDaFonte(c.fonte) === fonte).reduce((t, c) => t + Number(c.valorPago ?? c.valorPrevisto ?? 0), 0);
+    const diaDe = (c) => Number(String(c.dataPagamento || c.vencimento || "").slice(8, 10)) || 0;
+    const soma = (mes, fonte) => custos.filter(c => c.mes === mes && contaDaFonte(c.fonte) === fonte && (diaCorteComp === null || diaDe(c) <= diaCorteComp)).reduce((t, c) => t + Number(c.valorPago ?? c.valorPrevisto ?? 0), 0);
     return FONTES.map(f => ({ fonte: f, Atual: soma(mesAtual, f), Anterior: soma(mesAnterior, f) })).filter(r => r.Atual > 0 || r.Anterior > 0);
-  }, [custos, mesAtual, mesAnterior]);
+  }, [custos, mesAtual, mesAnterior, diaCorteComp]);
   // Ranked by the change in R$ (a % on a tiny base, like R$ 299, is just noise).
   const variacoes = comparativo
     .map(r => ({ fonte: r.fonte, delta: r.Atual - r.Anterior, pct: r.Anterior > 0 ? ((r.Atual - r.Anterior) / r.Anterior) * 100 : null }))
@@ -3593,7 +3602,7 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
         )}
 
         {analise === "evolucao" && (
-        <div className="in" style={{ background: C.card, boxShadow: shadowSm, borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "160ms", display: "flex", flexDirection: "column" }}>
+        <div className="in" style={{ background: C.card, boxShadow: shadowSm, borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "160ms", display: "flex", flexDirection: "column", alignSelf: "stretch" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
             <span style={{ fontWeight: 700, fontSize: 13.5, color: C.ink }}>Pago x Recebido <span style={{ fontWeight: 500, fontSize: 11.5, color: C.faint }}>· toque num mês para abri-lo</span></span>
             <span style={{ display: "flex", gap: 10, fontSize: 11, color: C.muted, fontWeight: 600 }}>
@@ -3664,7 +3673,7 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
         {analise === "custos" && (
         <div className="in" style={{ background: C.card, boxShadow: shadowSm, borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "240ms", display: "flex", flexDirection: "column" }}>
           <div style={{ fontWeight: 700, fontSize: 13.5, color: C.ink, marginBottom: 4 }}>Este mês x mês anterior — por fonte</div>
-          <div style={{ fontSize: 11.5, color: C.faint, marginBottom: 10 }}>{monthLabel(mesAnterior)} (cinza) x {mesLabel}</div>
+          <div style={{ fontSize: 11.5, color: C.faint, marginBottom: 10 }}>{diaCorteComp !== null ? `${monthLabel(mesAnterior)} até o dia ${diaCorteComp} (cinza) x ${mesLabel} até hoje` : `${monthLabel(mesAnterior)} (cinza) x ${mesLabel}`}</div>
           {comparativo.length === 0 ? (
             <div style={{ color: C.muted, fontSize: 13, padding: "16px 0", textAlign: "center" }}>Sem custos nos dois meses para comparar.</div>
           ) : (
@@ -3712,7 +3721,7 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
         )}
 
         {analise === "evolucao" && movConta.rows.length >= 2 && movConta.contas.length > 0 && (
-        <div className="in" style={{ background: C.card, boxShadow: shadowSm, borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "280ms", display: "flex", flexDirection: "column" }}>
+        <div className="in" style={{ background: C.card, boxShadow: shadowSm, borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "280ms", display: "flex", flexDirection: "column", alignSelf: "stretch" }}>
           <div style={{ fontWeight: 700, fontSize: 13.5, color: C.ink, marginBottom: 4 }}>Movimento acumulado por conta</div>
           <div style={{ fontSize: 11.5, color: C.faint, marginBottom: 10 }}>Entradas menos saídas de cada conta desde {MESES[inicioIdx].toLowerCase()} (movimento, sem saldo inicial)</div>
           <div style={{ display: "flex", gap: 12, flexWrap: "wrap", fontSize: 11.5, fontWeight: 600, color: C.muted, marginBottom: 6 }}>
@@ -3913,7 +3922,7 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
   const openNew = () => { setEditingId(null); setForm(blankCusto(mesFiltro)); setShowForm(true); };
   const formDeCusto = (c) => ({
     mes: c.mes, ano: c.ano, descricao: c.descricao, vencimento: c.vencimento || "",
-    dataPagamento: c.dataPagamento || "", valorPrevisto: fmtValorInput(c.valorPrevisto),
+    dataPagamento: c.dataPagamento || "", valorPrevisto: Number(c.valorPrevisto) > 0 ? fmtValorInput(c.valorPrevisto) : "",
     valorPago: fmtValorInput(c.valorPago), fonte: c.fonte, status: c.status, obs: c.obs || "", fixoId: c.fixoId || ""
   });
   const openEdit = (c) => {
@@ -3959,13 +3968,15 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
   const submit = async (e) => {
     e.preventDefault();
     if (saving) return;
-    if (!form.descricao || !form.vencimento || form.valorPrevisto === "") return;
-    const valorPrevistoNum = parseValorBR(form.valorPrevisto);
+    if (!form.descricao || !form.vencimento) return;
+    // Pendente pode ficar sem Valor Previsto (ex.: Unimed, que só se sabe o valor ao pagar). Pago continua exigindo o Valor Pago.
+    let valorPrevistoNum = form.valorPrevisto === "" ? 0 : parseValorBR(form.valorPrevisto);
     const valorPagoNum = form.valorPago === "" ? null : parseValorBR(form.valorPago);
-    if (!isValorValido(valorPrevistoNum) || (valorPagoNum !== null && !isValorValido(valorPagoNum))) {
+    if ((form.valorPrevisto !== "" && !isValorValido(valorPrevistoNum)) || (valorPagoNum !== null && !isValorValido(valorPagoNum))) {
       alert("O valor precisa ser maior que zero.");
       return;
     }
+    if (form.status === "Pago" && !(valorPrevistoNum > 0) && valorPagoNum > 0) valorPrevistoNum = valorPagoNum;
     if (!(await confirmDateSanity(form.vencimento, "data de vencimento"))) return;
     // Campos-chave: um custo Pago precisa de Valor Pago e Data de Pagamento, senão some dos saldos e do Anual.
     if (form.status === "Pago") {
@@ -4080,7 +4091,7 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
       </div>
       <div style={{ flexShrink: 0, textAlign: "right" }}>
         <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 700, fontSize: 17, color: C.ink }}>
-          {fmtBRL(c.valorPago ?? c.valorPrevisto)}
+          {Number(c.valorPago ?? c.valorPrevisto ?? 0) > 0 ? fmtBRL(c.valorPago ?? c.valorPrevisto) : <span style={{ fontFamily: "inherit", fontSize: 13, color: C.muted }}>sem valor</span>}
         </div>
         {c.valorPago != null && Math.abs(Number(c.valorPago) - Number(c.valorPrevisto || 0)) > 0.005 && (
           <div style={{ fontSize: 10.5, color: C.faint, marginTop: 1 }}>previsto {fmtBRL(c.valorPrevisto)}</div>
@@ -4282,7 +4293,7 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
             <Field label="Descrição / Categoria" span={2}><TextInput required value={form.descricao} onChange={e=>setForm({...form,descricao:e.target.value})} /></Field>
             <Field label="Vencimento"><TextInput type="date" required value={form.vencimento} onChange={e=>setForm({...form,vencimento:e.target.value})} /></Field>
             <Field label="Data Pagamento"><TextInput type="date" value={form.dataPagamento} onChange={e=>setForm({...form,dataPagamento:e.target.value})} /></Field>
-            <Field label="Valor Previsto (R$)"><TextInput type="text" inputMode="decimal" placeholder="0,00" required value={form.valorPrevisto} onChange={e=>setForm({...form,valorPrevisto:e.target.value})} /></Field>
+            <Field label="Valor Previsto (R$)"><TextInput type="text" inputMode="decimal" placeholder="0,00" value={form.valorPrevisto} onChange={e=>setForm({...form,valorPrevisto:e.target.value})} /></Field>
             <Field label="Valor Pago (R$)"><TextInput type="text" inputMode="decimal" placeholder="0,00" value={form.valorPago} onChange={e=>setForm({...form,valorPago:e.target.value})} /></Field>
             <Field label="Fonte de Pagamento"><SelectInput options={opcoesFonte(form.fonte)} value={form.fonte} onChange={e=>setForm({...form,fonte:e.target.value})} /></Field>
             <Field label="Status"><SelectInput options={STATUS_CUSTO} value={form.status} onChange={e => {
@@ -4391,7 +4402,7 @@ function ReceitasTab({ receitas, onAdd, onRemove, onUpdate, inicioContagem, jump
     setEditingId(r.id);
     setForm({
       mes: r.mes, ano: r.ano, descricao: r.descricao, dataRecebimento: r.dataRecebimento || "",
-      valorPrevisto: fmtValorInput(r.valorPrevisto), valorRecebido: fmtValorInput(r.valorRecebido),
+      valorPrevisto: Number(r.valorPrevisto) > 0 ? fmtValorInput(r.valorPrevisto) : "", valorRecebido: fmtValorInput(r.valorRecebido),
       categoria: r.categoria || "", contaDestino: r.contaDestino, status: r.status, obs: r.obs || ""
     });
     setShowForm(true);
@@ -4422,7 +4433,7 @@ function ReceitasTab({ receitas, onAdd, onRemove, onUpdate, inicioContagem, jump
       </div>
       <div style={{ textAlign: "right", minWidth: 92 }}>
         <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 700, fontSize: 14.5, color: C.ink }}>
-          {fmtBRL(r.valorRecebido ?? r.valorPrevisto)}
+          {Number(r.valorRecebido ?? r.valorPrevisto ?? 0) > 0 ? fmtBRL(r.valorRecebido ?? r.valorPrevisto) : <span style={{ fontFamily: "inherit", fontSize: 13, color: C.muted }}>sem valor</span>}
         </div>
         {r.valorRecebido != null && Math.abs(Number(r.valorRecebido) - Number(r.valorPrevisto || 0)) > 0.005 && (
           <div style={{ fontSize: 10.5, color: C.faint, marginTop: 1 }}>previsto {fmtBRL(r.valorPrevisto)}</div>
@@ -4435,13 +4446,15 @@ function ReceitasTab({ receitas, onAdd, onRemove, onUpdate, inicioContagem, jump
   const submit = async (e) => {
     e.preventDefault();
     if (saving) return;
-    if (!form.descricao || !form.dataRecebimento || form.valorPrevisto === "") return;
-    const valorPrevistoNum = parseValorBR(form.valorPrevisto);
+    if (!form.descricao || !form.dataRecebimento) return;
+    // Pendente pode ficar sem Valor Previsto (valor que só se sabe ao receber). Recebida continua exigindo o Valor Recebido.
+    let valorPrevistoNum = form.valorPrevisto === "" ? 0 : parseValorBR(form.valorPrevisto);
     const valorRecebidoNum = form.valorRecebido === "" ? null : parseValorBR(form.valorRecebido);
-    if (!isValorValido(valorPrevistoNum) || (valorRecebidoNum !== null && !isValorValido(valorRecebidoNum))) {
+    if ((form.valorPrevisto !== "" && !isValorValido(valorPrevistoNum)) || (valorRecebidoNum !== null && !isValorValido(valorRecebidoNum))) {
       alert("O valor precisa ser maior que zero.");
       return;
     }
+    if (form.status === "Recebido" && !(valorPrevistoNum > 0) && valorRecebidoNum > 0) valorPrevistoNum = valorRecebidoNum;
     if (!(await confirmDateSanity(form.dataRecebimento, "data de recebimento"))) return;
     if (form.status === "Recebido" && valorRecebidoNum === null) {
       alert("Esta receita está como Recebida. Preencha o Valor Recebido.\n\nSe ainda não entrou, mude o Status para Pendente.");
@@ -4597,7 +4610,7 @@ function ReceitasTab({ receitas, onAdd, onRemove, onUpdate, inicioContagem, jump
             }} /></Field>
             <Field label="Data Recebimento"><TextInput type="date" required value={form.dataRecebimento} onChange={e=>setForm({...form,dataRecebimento:e.target.value})} /></Field>
             <Field label="Categoria"><TextInput value={form.categoria} onChange={e=>setForm({...form,categoria:e.target.value})} /></Field>
-            <Field label="Valor Previsto (R$)"><TextInput type="text" inputMode="decimal" placeholder="0,00" required value={form.valorPrevisto} onChange={e=>setForm({...form,valorPrevisto:e.target.value})} /></Field>
+            <Field label="Valor Previsto (R$)"><TextInput type="text" inputMode="decimal" placeholder="0,00" value={form.valorPrevisto} onChange={e=>setForm({...form,valorPrevisto:e.target.value})} /></Field>
             <Field label="Valor Recebido (R$)"><TextInput type="text" inputMode="decimal" placeholder="0,00" value={form.valorRecebido} onChange={e=>setForm({...form,valorRecebido:e.target.value})} /></Field>
             <Field label="Conta de Destino"><SelectInput options={opcoesFonte(form.contaDestino)} value={form.contaDestino} onChange={e => { destinoManual.current = true; setForm({ ...form, contaDestino: e.target.value }); }} /></Field>
             <Field label="Status"><SelectInput options={STATUS_RECEITA} value={form.status} onChange={e => {
@@ -4647,7 +4660,7 @@ function MonthCard({ nome, pago, saldo, status, pctLiquidado, temDados, atual, f
             <div style={{ fontSize: 10.5, color: C.muted, fontWeight: 600 }}>Saldo</div>
             <div style={{
               fontFamily: "'IBM Plex Mono', monospace", fontWeight: 700, fontSize: 13.5, whiteSpace: "nowrap",
-              color: saldoCor(saldo)
+              color: foraContagem ? C.muted : saldoCor(saldo)
             }}>{fmtBRL(saldo)}</div>
           </div>
           {atual
@@ -4946,6 +4959,7 @@ function DemandasTab({ demandas, onAdd, onRemove, onUpdate, onStatusChange, jump
   };
 
   const [paradasAberto, setParadasAberto] = useState(false);
+  const [concluidasTodas, setConcluidasTodas] = useState(false);
   const PRIORIDADE_COLOR = { "Alta": C.coral, "Média": C.amber, "Baixa": C.emeraldDeep };
   const porPrioridade = useMemo(() => {
     const map = { "Alta": 0, "Média": 0, "Baixa": 0 };
@@ -5024,7 +5038,9 @@ function DemandasTab({ demandas, onAdd, onRemove, onUpdate, onStatusChange, jump
           const ehParadaD = (d) => col.status === "Pendente" && d.prazo && (diasAteVenc(d.prazo) ?? 0) <= -PARADA_DIAS;
           const paradasCol = items.filter(ehParadaD);
           const ativasCol = items.filter(d => !ehParadaD(d));
-          const itensVis = paradasCol.length > 0 && !paradasAberto ? ativasCol : [...ativasCol, ...paradasCol];
+          const baseVis = paradasCol.length > 0 && !paradasAberto ? ativasCol : [...ativasCol, ...paradasCol];
+          const limitaConcl = col.status === "Concluída" && !concluidasTodas && baseVis.length > 5;
+          const itensVis = limitaConcl ? baseVis.slice(0, 5) : baseVis;
           return (
             <div key={col.status}>
               <div style={{ position: "sticky", top: 0, zIndex: 6, background: C.page, display: "flex", alignItems: "center", gap: 8, marginBottom: 6, padding: "8px 2px" }}>
@@ -5091,6 +5107,13 @@ function DemandasTab({ demandas, onAdd, onRemove, onUpdate, onStatusChange, jump
                       </div>}
                     </div>
                   ))}
+                  {col.status === "Concluída" && baseVis.length > 5 && (
+                    <button type="button" className="tap" onClick={() => setConcluidasTodas(a => !a)} aria-expanded={concluidasTodas}
+                      style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, border: `1px dashed ${C.border}`, background: "transparent", color: C.muted, borderRadius: 14, padding: "11px 14px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+                      {concluidasTodas ? "Mostrar menos" : `Ver mais (${baseVis.length - 5})`}
+                      <ChevronDown size={16} style={{ transform: concluidasTodas ? "rotate(180deg)" : "none", transition: "transform .2s ease" }} />
+                    </button>
+                  )}
                   {paradasCol.length > 0 && (
                     <button type="button" className="tap" onClick={() => setParadasAberto(a => !a)} aria-expanded={paradasAberto}
                       style={{ display: "flex", alignItems: "center", gap: 8, border: `1px dashed ${C.border}`, background: "transparent", color: C.muted, borderRadius: 14, padding: "11px 14px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}>
