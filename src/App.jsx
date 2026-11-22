@@ -2160,7 +2160,7 @@ function useRitmoMes(custos, mesAtual, nMeses = 3) {
       .reduce((s, c) => s + Number(c.valorPago || 0), 0);
     const pct = (pagoAteAgora / mediaAteODia) * 100;
 
-    return { disponivel: true, diaRef, mediaAteODia, mediaMensal, pagoAteAgora, pct, nMeses: historico.length };
+    return { disponivel: true, diaRef, mediaAteODia, mediaMensal, pagoAteAgora, pct, nMeses: historico.length, meses: historico.map(m => m.mk).reverse() };
   }, [custos, mesAtual, nMeses]);
 }
 
@@ -2234,14 +2234,14 @@ function serieSaidas(custos, mesKey, fonte, minMes) {
   }
   const ref = rows[Math.max(0, diaRef - 1)];
   return {
-    rows, nDias, diaRef, corrente, futuro, nBase: hist.length, temProj, faltam, nFaltam: abertos.length,
+    rows, nDias, diaRef, corrente, futuro, nBase: hist.length, temProj, faltam, nFaltam: abertos.length, nSemValor: abertos.filter(c => !(Number(c.valorPrevisto || 0) > 0)).length,
     pagoAteHoje: diaRef > 0 && ref ? ref.atual || 0 : 0, normalAteHoje: ref && ref.normal !== null && diaRef > 0 ? ref.normal : 0,
     temDados: atual.n > 0 || ((corrente || futuro) && (hist.length > 0 || abertos.length > 0))
   };
 }
 
 function SaidasMesCard({ serie, mesLabel, entrada = false }) {
-  const { rows, nDias, diaRef, corrente, nBase, temProj, faltam, nFaltam, pagoAteHoje, normalAteHoje } = serie;
+  const { rows, nDias, diaRef, corrente, nBase, temProj, faltam, nFaltam, nSemValor, pagoAteHoje, normalAteHoje } = serie;
   const ticks = [1, 5, 10, 15, 20, 25, nDias].filter((v, i, a) => v <= nDias && a.indexOf(v) === i);
   const cor = entrada ? "#00E0A8" : "#FF5A68";
   const T = entrada
@@ -2261,7 +2261,7 @@ function SaidasMesCard({ serie, mesLabel, entrada = false }) {
       <div style={{ fontSize: 11.5, color: C.faint, marginBottom: 8, lineHeight: 1.5 }}>
         <div>
           {corrente ? <>Até o dia {diaRef}: {T.feitoMin} {dado(fmtBRL(pagoAteHoje))}</> : serie.futuro ? <>Mês ainda não começou</> : <>Mês fechado: {T.feitoMin} {dado(fmtBRL(pagoAteHoje))}</>}
-          {nFaltam > 0 && <> · {corrente || serie.futuro ? "faltam" : T.sem} {dado(fmtBRL(faltam))} em {nFaltam} {nFaltam === 1 ? T.un[0] : T.un[1]}</>}
+          {nFaltam > 0 && <> · {corrente || serie.futuro ? "faltam" : T.sem} {dado(fmtBRL(faltam))} em {nFaltam} {nFaltam === 1 ? T.un[0] : T.un[1]}{nSemValor > 0 && <> ({nSemValor} sem valor)</>}</>}
         </div>
         {nBase > 0 && !serie.futuro && <div>Normal até o dia {diaRef}: {dado(fmtBRL(normalAteHoje))}</div>}
         {nBase === 0 && !temProj && <div>Ainda sem meses anteriores com {entrada ? "recebimentos" : "pagamentos"} para comparar.</div>}
@@ -2409,7 +2409,13 @@ function AvisoDesfazer() {
 const estimativaSemValor = (c, custos, mesAnt) => {
   const n = normDesc(c.descricao);
   const a = custos.find(x => x.mes === mesAnt && casaFixo(normDesc(x.descricao), n, mesAnt));
-  return a ? Number(a.valorPago || a.valorPrevisto || 0) : 0;
+  if (a && Number(a.valorPago || a.valorPrevisto || 0) > 0) return Number(a.valorPago || a.valorPrevisto || 0);
+  // Sem lançamento no mês anterior (ex.: "Unimed Outubro" foi lançada em novembro): usa o último PAGO com o mesmo nome, em qualquer mês, ignorando nome de mês.
+  const semMes = (t) => t.split(/\s+/).filter(w => !MESES_NOME.includes(w)).join(" ");
+  const nb = semMes(n);
+  const ult = custos.filter(x => x.id !== c.id && x.status === "Pago" && Number(x.valorPago || 0) > 0 && semMes(normDesc(x.descricao)) === nb)
+    .sort((x, y) => String(y.dataPagamento || y.vencimento || "").localeCompare(String(x.dataPagamento || x.vencimento || "")))[0];
+  return ult ? Number(ult.valorPago) : 0;
 };
 // "Unimed Outubro" lançado em novembro é a conta de outubro, não a de novembro: nome com OUTRO mês não conta como lançado.
 const MESES_NOME = ["janeiro", "fevereiro", "marco", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
@@ -2662,13 +2668,13 @@ function RecorrentesReceitasModal({ lista, receitas, mes, erro, onAdd, onUpdate,
         {ord.length === 0 && (
           <div style={{ border: `1px dashed ${C.border}`, borderRadius: 14, padding: 18, textAlign: "center", color: C.muted, fontSize: 13.5, marginBottom: 16 }}>
             Nenhuma receita recorrente ainda.
-            {base.length > 0 && <div style={{ marginTop: 10 }}><button type="button" onClick={criarBase} disabled={busy} style={{ ...addBtnStyle, margin: "0 auto", opacity: busy ? 0.7 : 1 }}>Criar a partir do mês anterior ({base.length})</button></div>}
+            {base.length > 0 && <div style={{ marginTop: 10 }}><button type="button" onClick={criarBase} disabled={busy} style={{ ...addBtnStyle, margin: "0 auto", opacity: busy ? 0.7 : 1 }}>Criar a partir do mês anterior ({base.length} {base.length === 1 ? "receita" : "receitas"})</button></div>}
           </div>
         )}
         {ord.map(x => (
           <div key={x.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 0", borderBottom: `1px solid ${C.border}`, opacity: x.ativo === false ? 0.5 : 1 }}>
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 14, fontWeight: 700, color: C.ink, textTransform: "uppercase" }}>{x.descricao}{x.ativo === false ? " · desativada" : ""}</div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: C.ink }}>{tituloBonito(x.descricao)}{x.ativo === false ? " · desativada" : ""}</div>
               <div style={{ fontSize: 11.5, color: C.faint }}>dia {x.dia} · {fmtBRL(x.valor)} · {x.conta || "conta varia"}</div>
             </div>
             <button type="button" style={mini} onClick={() => setF({ id: x.id, descricao: x.descricao, dia: String(x.dia), valor: fmtValorInput(x.valor), conta: x.conta || "Conta Corrente", categoria: x.categoria || "" })}>Editar</button>
@@ -3285,7 +3291,8 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
     const recebido = rs.reduce((t, r) => t + Number(r.valorRecebido || 0), 0);
     const aReceber = rs.filter(r => r.status !== "Recebido").reduce((t, r) => t + Math.max(0, Number(r.valorPrevisto || 0) - Number(r.valorRecebido || 0)), 0);
     const previstoRec = rs.reduce((t, r) => t + Number(r.valorPrevisto || 0), 0);
-    return { pago, aPagar, recebido, aReceber, previstoRec, saldoProjetado: (recebido + aReceber) - (pago + aPagar) };
+    const estimados = cs.filter(c => c.status !== "Pago" && !(Number(c.valorPrevisto || 0) > 0)).map(c => ({ id: c.id, descricao: c.descricao, valor: estimativaSemValor(c, custos, mesAnterior) })).filter(x => x.valor > 0);
+    return { pago, aPagar, recebido, aReceber, previstoRec, estimados, saldoProjetado: (recebido + aReceber) - (pago + aPagar) };
   }, [custos, receitas, mesAtual, mesAnterior]);
   // Fixos ainda não lançados neste mês entram na projeção como ESTIMATIVA (usa o valor pago esperado, se houver).
   // Fixos sem valor (ex.: Unimed, Gibson) ficam de fora e são avisados.
@@ -3309,7 +3316,7 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
   const projQuitado = projecao.aPagar === 0 && fixosEst === 0 && receitasEstTotal === 0 && projecao.aReceber === 0 && (projecao.pago + projecao.recebido) > 0;
   const projEstimada = fixosEst > 0 || receitasEstTotal > 0;
   // Notas da projeção (abrem no modal "Observações"): receitas esperadas, fixos estimados e fixos sem valor.
-  const nObs = [receitasEstTotal > 0, fixosEst > 0, fixosSemValor.length > 0].filter(Boolean).length;
+  const nObs = [receitasEstTotal > 0, fixosEst > 0, projecao.estimados.length > 0, fixosSemValor.length > 0].filter(Boolean).length;
   const projTemDados = (projecao.pago + projecao.recebido + projecao.aPagar + projecao.aReceber + fixosEst + receitasEstTotal) > 0;
 
   // "Próximos dias": fixos a lançar + custos e tarefas que vêm pela frente, tudo em ordem de data.
@@ -3401,8 +3408,8 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
       for (let i = inicioIdx; i < mesNumVisto; i++) if (melhor === null || saldosPorMes[i] > saldosPorMes[melhor]) melhor = i;
       return [
         { rotulo: "Saldo acumulado", valor: fmtBRL(acumAtual), sub: `desde ${MESES[inicioIdx].toLowerCase()}`, cor: acumAtual < 0 ? C.coral : C.emerald, mask: true },
-        { rotulo: "Média paga por mês", valor: ritmo.disponivel ? fmtBRL(ritmo.mediaMensal) : "—", sub: ritmo.disponivel ? `últimos ${ritmo.nMeses} meses` : "sem histórico", mask: true },
-        ...(melhor !== null ? [{ rotulo: "Melhor mês", valor: MESES[melhor], sub: `saldo ${fmtBRL(saldosPorMes[melhor])}`, mask: true }] : [])
+        { rotulo: "Média paga por mês", valor: ritmo.disponivel ? fmtBRL(ritmo.mediaMensal) : "—", sub: ritmo.disponivel ? (() => { const n = ritmo.meses.map(mk => MESES[Number(mk.slice(5, 7)) - 1].slice(0, 3)); return `${n.length > 1 ? `${n[0]}–${n[n.length - 1]}` : n[0]} · meses fechados`; })() : "sem histórico", mask: true },
+        ...(melhor !== null ? [{ rotulo: "Melhor mês", valor: MESES[melhor], sub: `saldo realizado ${fmtBRL(saldosPorMes[melhor])}`, mask: true }] : [])
       ];
     }
     if (analise === "custos") {
@@ -3437,6 +3444,13 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
             <ObsBloco titulo="Fixos ainda não lançados" total={fixosEst} hidden={hidden} nota="Entram como saída pelo valor cadastrado no fixo ou, sem ele, pelo lançamento do mês anterior.">
               {fixosFaltam.filter(f => valorFixo(f) > 0).map(f => (
                 <ObsLinha key={f.id || f.descricao} hidden={hidden} nome={f.descricao} detalhe={`${f.dia ? `dia ${f.dia} · ` : ""}${valorFixoCad(f) > 0 ? "valor cadastrado" : "pelo valor do mês anterior"}`} valor={valorFixo(f)} />
+              ))}
+            </ObsBloco>
+          )}
+          {projecao.estimados.length > 0 && (
+            <ObsBloco titulo="Custos sem valor, estimados" total={projecao.estimados.reduce((t, x) => t + x.valor, 0)} hidden={hidden} nota="Lançados como Pendente sem valor. Entram como saída pelo último pagamento com o mesmo nome. Ao informar o valor, deixam de ser estimativa.">
+              {projecao.estimados.map(x => (
+                <ObsLinha key={x.id} hidden={hidden} nome={x.descricao} detalhe="pelo último pago" valor={x.valor} />
               ))}
             </ObsBloco>
           )}
@@ -3613,8 +3627,8 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
           {tendencia.some(d => d.fora) && (
             <div style={{ fontSize: 11, color: C.faint, marginBottom: 6 }}>Meses esmaecidos são anteriores ao início da contagem (lançamentos incompletos).</div>
           )}
-          <div style={{ width: "100%", flex: 1, minHeight: 170 }}>
-            <ResponsiveContainer width="100%" height="100%" minHeight={170}>
+          <div style={{ width: "100%", flex: 1, minHeight: 240 }}>
+            <ResponsiveContainer width="100%" height="100%" minHeight={240}>
               <BarChart data={tendencia} barGap={4} barCategoryGap="24%" margin={{ top: 18 }}>
                 <defs>
                   <linearGradient id="gPago" x1="0" y1="0" x2="0" y2="1">
@@ -3658,7 +3672,7 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
                       {c.fontes.length > 1 && <span style={{ color: C.faint, fontWeight: 500, fontSize: 11 }}> · {c.fontes.length} fontes</span>}
                       {habitualDe[c.id] != null && <span style={{ color: C.amber, fontWeight: 700, fontSize: 11 }}> · +{habitualDe[c.id]}% vs habitual</span>}
                     </span>
-                    <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12.5, color: i === 0 ? C.coral : C.muted, fontWeight: i === 0 ? 700 : 500 }}>{hidden ? "•••" : fmtBRL(c.valor)}</span>
+                    <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12.5, color: i === 0 ? C.ink : C.muted, fontWeight: i === 0 ? 700 : 500 }}>{hidden ? "•••" : fmtBRL(c.valor)}</span>
                   </div>
                   <div style={{ height: 5, borderRadius: 3, background: C.border, marginLeft: 24, overflow: "hidden" }}>
                     <div style={{ width: `${(c.valor / topMax) * 100}%`, height: "100%", borderRadius: 3, background: c.fontes.length === 1 ? fonteColor(c.fontes[0]) : C.lavender, opacity: i === 0 ? 1 : 0.8 }} />
@@ -3736,8 +3750,8 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
               );
             })}
           </div>
-          <div style={{ width: "100%", flex: 1, minHeight: 180 }}>
-            <ResponsiveContainer width="100%" height="100%" minHeight={180}>
+          <div style={{ width: "100%", flex: 1, minHeight: 240 }}>
+            <ResponsiveContainer width="100%" height="100%" minHeight={240}>
               <AreaChart data={movConta.rows} margin={{ top: 8, right: 10, left: 10 }}>
                 <defs>
                   {movConta.contas.map((k, mi) => (
@@ -3898,7 +3912,9 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
     // Largest fonte first — same ordering as the dashboard's "Custos por fonte".
     const porFonteOrdenado = Object.fromEntries(Object.entries(porFonte).sort((a, b) => b[1] - a[1]));
     const faltaPagar = filtrados.filter(c => c.status !== "Pago").reduce((s,c) => s + Number(c.valorPrevisto||0), 0);
-    return { totalPrevisto, totalPago, diferenca: totalPago-totalPrevisto, faltaPagar, pagos, pendentes, atrasados, porFonte: porFonteOrdenado };
+    const doPagos = filtrados.filter(c => c.status === "Pago");
+    const difPagos = doPagos.reduce((s,c) => s + Number(c.valorPago||0) - Number(c.valorPrevisto||0), 0);
+    return { totalPrevisto, totalPago, diferenca: totalPago-totalPrevisto, difPagos, faltaPagar, pagos, pendentes, atrasados, porFonte: porFonteOrdenado };
   }, [filtrados]);
   const serie = useMemo(() => serieSaidas(custos, mesFiltro, fonteFiltro), [custos, mesFiltro, fonteFiltro]);
   const meiosCustos = useMemo(() => notasMeios(filtrados), [filtrados]);
@@ -4117,7 +4133,7 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
     <div>
       <TabHero titulo="Custos" mesLabel={monthLabel(mesFiltro)} onLabelClick={() => setShowSeletorMesC(true)}
         destaque={(totals.pendentes + totals.atrasados > 0)
-          ? { rotulo: "Falta pagar", valor: fmtBRL(totals.faltaPagar), cor: totals.atrasados > 0 ? "#FF8A76" : "#FFC53D", sub: `Pago ${fmtBRL(totals.totalPago)} de ${fmtBRL(totals.totalPrevisto)}` }
+          ? { rotulo: "Falta pagar", valor: fmtBRL(totals.faltaPagar), cor: totals.atrasados > 0 ? "#FF8A76" : "#FFC53D", sub: `Pago ${fmtBRL(totals.totalPago)} de ${fmtBRL(totals.totalPrevisto)}${totals.difPagos < -0.005 ? ` · ${fmtBRL(-totals.difPagos)} abaixo do previsto` : totals.difPagos > 0.005 ? ` · ${fmtBRL(totals.difPagos)} acima do previsto` : ""}` }
           : { rotulo: "Pago no mês", valor: fmtBRL(totals.totalPago), cor: "#4FE8BE", sub: `de ${fmtBRL(totals.totalPrevisto)} previsto${filtrados.length > 0 && totals.diferenca < -0.005 ? ` · economia de ${fmtBRL(-totals.diferenca)}` : totals.diferenca > 0.005 ? ` · ${fmtBRL(totals.diferenca)} acima do previsto` : ""}` }}
         chips={[
           ...(totals.pagos > 0 ? [{ t: `${totals.pagos} ${totals.pagos === 1 ? "pago" : "pagos"}`, cor: "#4FE8BE" }] : []),
@@ -4135,7 +4151,7 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
               <span style={{ display: "block", fontSize: 13, fontWeight: 700, color: "#F3F5FA", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{proximo.item.descricao}{proximo.item.vencimento ? ` · ${fmtDate(proximo.item.vencimento)}` : ""}</span>
             </span>
             <span style={{ textAlign: "right", flexShrink: 0 }}>
-              <span style={{ display: "block", fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, fontWeight: 700, color: "#F3F5FA" }}>{fmtBRL(proximo.item.valorPrevisto)}</span>
+              <span style={{ display: "block", fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, fontWeight: 700, color: "#F3F5FA" }}>{Number(proximo.item.valorPrevisto) > 0 ? fmtBRL(proximo.item.valorPrevisto) : "sem valor"}</span>
               <span style={{ display: "block", fontSize: 11, fontWeight: 700, color: proximo.cor }}>{proximo.texto}</span>
             </span>
           </button>
@@ -4241,7 +4257,7 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
                       {g.items.length}
                     </span>
                   </div>
-                  <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: C.pageMuted }}>{fmtBRL(totalGrupo)}</span>
+                  <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: C.pageMuted }}>{totalGrupo > 0.005 || g.items.length === 0 ? fmtBRL(totalGrupo) : "sem valor"}</span>
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                   {g.blocos.map((b, bi) => {
@@ -4418,7 +4434,7 @@ function ReceitasTab({ receitas, onAdd, onRemove, onUpdate, inicioContagem, jump
   const renderLinhaReceita = (r) => (
     <>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontWeight: 700, color: C.ink, fontSize: 15, textTransform: "uppercase" }}>{r.descricao}</div>
+        <div style={{ fontWeight: 700, color: C.ink, fontSize: 15 }}>{tituloBonito(r.descricao)}</div>
         <div style={{ fontSize: 11.5, color: C.muted, marginTop: 2, display: "flex", alignItems: "center", flexWrap: "wrap", gap: "0 6px" }}>
           <span>
             {r.status === "Pendente" ? "Previsto para" : "Recebido"} {fmtDate(r.dataRecebimento)}{r.categoria ? ` · ${r.categoria}` : ""}{r.contaDestino ? " ·" : ""}
@@ -4971,6 +4987,7 @@ function DemandasTab({ demandas, onAdd, onRemove, onUpdate, onStatusChange, jump
   const atrasadasDem = listaAtrasadas.length;
   const paradasDem = listaAtrasadas.filter(d => (diasAteVenc(d.prazo) ?? 0) <= -PARADA_DIAS).length;
   const recentesDem = atrasadasDem - paradasDem;
+  const paradasEmAnd = listaAtrasadas.filter(d => d.status === "Em Andamento" && (diasAteVenc(d.prazo) ?? 0) <= -PARADA_DIAS).length;
   const maisUrgenteDem = useMemo(() => {
     const abertas = demandas.filter(d => d.status !== "Concluída" && d.prazo).sort((a, b) => String(a.prazo).localeCompare(String(b.prazo)));
     // Tarefas paradas há 30+ dias não são "a mais urgente": prefere a atrasada mais antiga que ainda é recente, ou a próxima a vencer.
@@ -5011,7 +5028,7 @@ function DemandasTab({ demandas, onAdd, onRemove, onUpdate, onStatusChange, jump
         destaque={{ rotulo: "Em aberto", valor: `${resumo.pendente + resumo.andamento} ${(resumo.pendente + resumo.andamento) === 1 ? "tarefa" : "tarefas"}`, cor: (resumo.pendente + resumo.andamento) > 0 ? "#F3F5FA" : "#4FE8BE", sub: `${resumo.pendente} pendentes · ${resumo.andamento} em andamento · ${resumo.concluida} concluídas` }}
         chips={[
           ...(recentesDem > 0 ? [{ t: `${recentesDem} ${recentesDem === 1 ? "atrasada" : "atrasadas"} · adiar ›`, cor: "#FF8A76", onClick: () => abrirAdiar(false) }] : []),
-          ...(paradasDem > 0 ? [{ t: `${paradasDem} ${paradasDem === 1 ? "parada" : "paradas"} há 30+ dias · adiar ›`, cor: "#B8C2E8", onClick: () => abrirAdiar(true) }] : []),
+          ...(paradasDem > 0 ? [{ t: `${paradasDem} ${paradasDem === 1 ? "parada" : "paradas"} há 30+ dias${paradasEmAnd > 0 ? ` (${paradasEmAnd} em andamento)` : ""} · adiar ›`, cor: "#B8C2E8", onClick: () => abrirAdiar(true) }] : []),
           ...(porPrioridade.length > 1 ? porPrioridade.map(([p, n]) => ({ t: `${p} ${n}`, cor: p === "Alta" ? "#FF8A76" : p === "Média" ? "#FFC53D" : "#4FE8BE" })) : [])
         ]}
         pct={totalDemandas > 0 ? pctConcluido : null}
@@ -5083,11 +5100,11 @@ function DemandasTab({ demandas, onAdd, onRemove, onUpdate, onStatusChange, jump
                           {d.criadoEm && <div>Criada em {fmtDate(d.criadoEm)}</div>}
                         </div>
                       )}
-                      {col.next && <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                      {col.next && <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
                         {col.next && (
                           <button onClick={(e) => { e.stopPropagation(); onStatusChange(d.id, col.next); }} style={{
                             display: "flex", alignItems: "center", gap: 5, border: "none", background: C.border,
-                            color: C.ink, borderRadius: 9, padding: "6px 10px", fontSize: 11.5, fontWeight: 700, cursor: "pointer"
+                            color: C.ink, borderRadius: 9, padding: "6px 8px", fontSize: 11.5, fontWeight: 700, cursor: "pointer"
                           }}>
                             {col.next} <ArrowRight size={12} />
                           </button>
@@ -5099,7 +5116,7 @@ function DemandasTab({ demandas, onAdd, onRemove, onUpdate, onStatusChange, jump
                             if (await confirmar(`Adiar o prazo de "${d.nome}" para ${fmtDate(novo)}?`, { okLabel: "Adiar" })) onUpdate(d.id, { prazo: novo });
                           }} title="Adiar prazo em 7 dias" style={{
                             display: "flex", alignItems: "center", gap: 5, border: `1px solid ${C.border}`, background: "transparent",
-                            color: C.muted, borderRadius: 9, padding: "5px 10px", fontSize: 11.5, fontWeight: 700, cursor: "pointer"
+                            color: C.muted, borderRadius: 9, padding: "5px 8px", fontSize: 11.5, fontWeight: 700, cursor: "pointer"
                           }}>
                             <Clock size={12} /> +7 dias
                           </button>
