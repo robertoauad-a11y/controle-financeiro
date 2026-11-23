@@ -490,6 +490,8 @@ const C = {
   pageInk: "#F3F5FA", pageMuted: "#8B93B5", pageFaint: "#5C6485", pageChip: "#252B45",
 };
 let shadowSm = "0 1px 3px rgba(0,0,0,0.35), 0 0 0 1px rgba(255,255,255,0.04)";
+// Contorno um pouco mais visível nos cards das Análises (só no tema escuro; no claro a sombra não tem esse tom).
+const sombraAn = () => shadowSm.replace("rgba(255,255,255,0.04)", "rgba(255,255,255,0.07)");
 let shadowMd = "0 10px 30px rgba(0,0,0,0.45), 0 0 0 1px rgba(255,255,255,0.05)";
 let shadowNav = "0 -8px 24px rgba(0,0,0,0.35)"; // sombra acima do menu inferior (no claro fica bem mais leve, senão vira uma faixa cinza)
 // Themes. "escuro" is the app's identity and the default. "claro": cards, text and accents all light
@@ -2869,7 +2871,7 @@ function BarraEmpilhada({ dados, corDe, hidden, nota, totalLabel = "Total" }) {
   const total = dados.reduce((t, d) => t + d.value, 0) || 1;
   return (
     <div>
-      <div style={{ display: "flex", height: 16, borderRadius: 8, overflow: "hidden", gap: 2, marginBottom: 14 }}>
+      <div style={{ display: "flex", height: 40, borderRadius: 12, overflow: "hidden", gap: 2, marginBottom: 14 }}>
         {dados.map(d => (
           <div key={d.name} title={d.name} style={{ width: `${(d.value / total) * 100}%`, minWidth: 3, background: corDe(d.name), position: "relative", overflow: "hidden" }}>
             {d.pend > 0 && d.value > 0 && <div style={{ position: "absolute", right: 0, top: 0, bottom: 0, width: `${Math.min(100, (d.pend / d.value) * 100)}%`, background: "repeating-linear-gradient(135deg, rgba(10,14,28,0.55) 0 4px, transparent 4px 8px)" }} />}
@@ -3597,25 +3599,25 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
 
       <TilesAnalise itens={tilesAnalise} hidden={hidden} />
 
-      <div className="grid2" style={{ marginBottom: 20, alignItems: "start" }}>
+      <div className="grid2" style={{ marginBottom: 20 }}>
         {/* Orçamento agora vive dentro do card de projeção */}
 
                 {analise === "custos" && porFonte.length > 1 && (
-        <div className="in" style={{ background: C.card, boxShadow: shadowSm, borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "40ms" }}>
+        <div className="in" style={{ background: C.card, boxShadow: sombraAn(), borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "40ms" }}>
           <div style={{ fontWeight: 700, fontSize: 13.5, color: C.ink, marginBottom: 12 }}>Custos por fonte — {mesLabel}</div>
           <BarraEmpilhada dados={porFonte} corDe={fonteColor} hidden={hidden} nota={meiosMes.join(" · ")} totalLabel="Pago + a pagar" />
         </div>
         )}
 
                 {analise === "receitas" && porCategoria.length > 1 && (
-        <div className="in" style={{ background: C.card, boxShadow: shadowSm, borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "120ms" }}>
+        <div className="in" style={{ background: C.card, boxShadow: sombraAn(), borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "120ms" }}>
           <div style={{ fontWeight: 700, fontSize: 13.5, color: C.ink, marginBottom: 12 }}>Receitas por título — {mesLabel}</div>
           <BarraEmpilhada dados={porCategoria} corDe={catColor} hidden={hidden} />
         </div>
         )}
 
         {analise === "evolucao" && (
-        <div className="in" style={{ background: C.card, boxShadow: shadowSm, borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "160ms", display: "flex", flexDirection: "column", alignSelf: "stretch" }}>
+        <div className="in" style={{ background: C.card, boxShadow: sombraAn(), borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "160ms", display: "flex", flexDirection: "column", alignSelf: "stretch" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
             <span style={{ fontWeight: 700, fontSize: 13.5, color: C.ink }}>Pago x Recebido <span style={{ fontWeight: 500, fontSize: 11.5, color: C.faint }}>· toque num mês para abri-lo</span></span>
             <span style={{ display: "flex", gap: 10, fontSize: 11, color: C.muted, fontWeight: 600 }}>
@@ -3656,7 +3658,7 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
         )}
 
         {analise === "custos" && (
-        <div className="in" style={{ background: C.card, boxShadow: shadowSm, borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "200ms" }}>
+        <div className="in" style={{ background: C.card, boxShadow: sombraAn(), borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "200ms" }}>
           <div style={{ fontWeight: 700, fontSize: 13.5, color: C.ink, marginBottom: 10 }}>Maiores custos — {mesLabel}</div>
           {topCustos.length === 0 ? (
             <div style={{ color: C.muted, fontSize: 13, padding: "16px 0", textAlign: "center" }}>Sem custos lançados neste mês.</div>
@@ -3684,7 +3686,7 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
         )}
 
         {analise === "custos" && (
-        <div className="in" style={{ background: C.card, boxShadow: shadowSm, borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "240ms", display: "flex", flexDirection: "column" }}>
+        <div className="in" style={{ background: C.card, boxShadow: sombraAn(), borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "240ms", display: "flex", flexDirection: "column" }}>
           <div style={{ fontWeight: 700, fontSize: 13.5, color: C.ink, marginBottom: 4 }}>Este mês x mês anterior — por fonte</div>
           <div style={{ fontSize: 11.5, color: C.faint, marginBottom: 10 }}>{diaCorteComp !== null ? `${monthLabel(mesAnterior)} até o dia ${diaCorteComp} (cinza) x ${mesLabel} até hoje` : `${monthLabel(mesAnterior)} (cinza) x ${mesLabel}`}</div>
           {comparativo.length === 0 ? (
@@ -3734,7 +3736,7 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
         )}
 
         {analise === "evolucao" && movConta.rows.length >= 2 && movConta.contas.length > 0 && (
-        <div className="in" style={{ background: C.card, boxShadow: shadowSm, borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "280ms", display: "flex", flexDirection: "column", alignSelf: "stretch" }}>
+        <div className="in" style={{ background: C.card, boxShadow: sombraAn(), borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "280ms", display: "flex", flexDirection: "column", alignSelf: "stretch" }}>
           <div style={{ fontWeight: 700, fontSize: 13.5, color: C.ink, marginBottom: 4 }}>Movimento acumulado por conta</div>
           <div style={{ fontSize: 11.5, color: C.faint, marginBottom: 10 }}>Entradas menos saídas de cada conta desde {MESES[inicioIdx].toLowerCase()} (movimento, sem saldo inicial)</div>
           <div style={{ display: "flex", gap: 12, flexWrap: "wrap", fontSize: 11.5, fontWeight: 600, color: C.muted, marginBottom: 6 }}>
@@ -3777,7 +3779,7 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
         </div>
         )}
         {analise === "receitas" && (
-        <div className="in" style={{ background: C.card, boxShadow: shadowSm, borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "320ms" }}>
+        <div className="in" style={{ background: C.card, boxShadow: sombraAn(), borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "320ms" }}>
           <div style={{ fontWeight: 700, fontSize: 13.5, color: C.ink, marginBottom: 4 }}>Receitas previstas x recebidas — {mesLabel}</div>
           <div style={{ fontSize: 11.5, color: C.faint, marginBottom: 10 }}>O que já entrou, sobre o que estava previsto</div>
           {receitasComparativo.length === 0 ? (
