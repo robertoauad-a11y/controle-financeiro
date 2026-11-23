@@ -59,8 +59,10 @@ const STATUS_DEMANDA = ["Pendente","Em Andamento","Concluída"];
 
 const fmtBRL = (v) => {
   const n = Number(v || 0);
-  return n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+  return n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" }).replace("-", "\u2212");
 };
+// Percentual com sinal tipográfico (+12% / −59%).
+const fmtPct = (n) => { const r = Math.round(n); return `${r > 0 ? "+" : r < 0 ? "\u2212" : ""}${Math.abs(r)}%`; };
 const fmtDate = (s) => {
   if (!s) return "—";
   const [y,m,d] = s.split("-");
@@ -273,7 +275,7 @@ const todayISO = () => localISO();
 const currentMonth = () => localISO().slice(0, 7);
 const parseValorBR = (raw) => {
   if (raw === null || raw === undefined || raw === "") return 0;
-  let s = String(raw).trim().replace(/[^\d.,-]/g, "");
+  let s = String(raw).trim().replace(/\u2212/g, "-").replace(/[^\d.,-]/g, "");
   if (!s) return 0;
   if (s.includes(",")) {
     // Vírgula presente: pontos são milhar, vírgula é decimal — "5.806,00" -> 5806.00
@@ -604,7 +606,7 @@ function RichTooltip({ active, payload, label, total, colorMap, modo }) {
     if (ant > 0) {
       const pct = ((atu - ant) / ant) * 100;
       // For costs, going up is the bad direction.
-      extra = { rotulo: "Variação", texto: `${pct > 0 ? "+" : ""}${pct.toFixed(0)}%`, cor: pct > 0 ? C.coral : C.emerald };
+      extra = { rotulo: "Variação", texto: fmtPct(pct), cor: pct > 0 ? C.coral : C.emerald };
     }
   }
   return (
@@ -1497,6 +1499,8 @@ export default function App() {
         @keyframes fadeInUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
         .in { animation: fadeInUp .4s cubic-bezier(.22,1,.36,1) backwards; }
         @media (max-width: 440px) { .rapido-txt { display: none; } }
+        .gridMeses { display: grid; gap: 12px; grid-template-columns: repeat(2, 1fr); }
+        @media (min-width: 680px) { .gridMeses { grid-template-columns: repeat(4, 1fr); } }
         .grid2 { display: grid; grid-template-columns: 1fr; gap: 20px; }
         @media (min-width: 680px) { .grid2 { grid-template-columns: 1fr 1fr; } .grid2 > * { margin-bottom: 0 !important; } }
         @media (min-width: 1100px) { .grid2 { grid-template-columns: 1fr 1fr 1fr; } }
@@ -2730,7 +2734,7 @@ function ProximoVencLed({ info, onOpen, entrada = false }) {
 function PixMesCard({ pix, mesLabel, hidden }) {
   const { n, total, nPend, totalPend, itens } = pix;
   return (
-    <div className="in" style={{ background: C.card, boxShadow: shadowSm, borderRadius: 16, padding: 16 }}>
+    <div className="in" style={{ background: C.card, boxShadow: shadowSm, borderRadius: 16, padding: 16, flex: 1 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, marginBottom: 4 }}>
         <span style={{ fontWeight: 700, fontSize: 12.5, color: C.ink, textTransform: "uppercase", letterSpacing: 0.4 }}>PIX do mês</span>
         <span style={{ fontSize: 11, color: C.faint }}>{mesLabel}</span>
@@ -3411,13 +3415,13 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
       return [
         { rotulo: "Saldo acumulado", valor: fmtBRL(acumAtual), sub: `desde ${MESES[inicioIdx].toLowerCase()}`, cor: acumAtual < 0 ? C.coral : C.emerald, mask: true },
         { rotulo: "Média paga por mês", valor: ritmo.disponivel ? fmtBRL(ritmo.mediaMensal) : "—", sub: ritmo.disponivel ? (() => { const n = ritmo.meses.map(mk => MESES[Number(mk.slice(5, 7)) - 1].slice(0, 3)); return `${n.length > 1 ? `${n[0]}–${n[n.length - 1]}` : n[0]} · meses fechados`; })() : "sem histórico", mask: true },
-        ...(melhor !== null ? [{ rotulo: "Melhor mês", valor: MESES[melhor], sub: `saldo realizado ${fmtBRL(saldosPorMes[melhor])}`, mask: true }] : [])
+        ...(melhor !== null ? [{ rotulo: "Melhor mês", valor: MESES[melhor], sub: `saldo realizado ${fmtBRL(saldosPorMes[melhor])}${melhor === mesNumVisto - 1 && mesAtual === currentMonth() ? " · em andamento" : ""}`, mask: true }] : [])
       ];
     }
     if (analise === "custos") {
       const top = topCustos[0];
       return [
-        { rotulo: "Falta pagar", valor: fmtBRL(projecao.aPagar), sub: `${projecao.aPagar > 0 ? "ainda previsto" : "tudo pago"}${fixosFaltam.length > 0 ? ` · ${fixosFaltam.length} ${fixosFaltam.length === 1 ? "fixo" : "fixos"} a lançar` : ""}`, cor: projecao.aPagar > 0 ? C.amber : C.emerald, mask: true },
+        { rotulo: "Falta pagar", valor: fmtBRL(projecao.aPagar), sub: `${projecao.aPagar > 0 ? "ainda previsto" : "tudo pago"}${projecao.estimados.length > 0 ? ` · inclui ${fmtBRL(projecao.estimados.reduce((t, x) => t + x.valor, 0))} estimados` : ""}${fixosFaltam.length > 0 ? ` · ${fixosFaltam.length} ${fixosFaltam.length === 1 ? "fixo" : "fixos"} a lançar` : ""}`, cor: projecao.aPagar > 0 ? C.amber : C.emerald, mask: true },
         ...(top ? [{ rotulo: "Maior custo", valor: top.descricao, sub: `${fmtBRL(top.valor)}${kpis.totalPago > 0 ? ` · ${((top.valor / kpis.totalPago) * 100).toFixed(0)}% do pago` : ""}`, mask: true }] : []),
         ...(porFonte[0] ? [{ rotulo: "Fonte principal", valor: porFonte[0].name, sub: `${pctDe(porFonte[0].value, porFonte)} dos custos` }] : [])
       ];
@@ -3548,6 +3552,7 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
             <div style={{ display: "flex", gap: 16, fontSize: 11, color: C.faint, flexWrap: "wrap" }}>
               <span style={{ display: "flex", alignItems: "center", gap: 6 }}><span style={{ width: 10, height: 10, borderRadius: 3, background: C.muted }} />já realizado</span>
               <span style={{ display: "flex", alignItems: "center", gap: 6 }}><span style={{ width: 10, height: 10, borderRadius: 3, background: `repeating-linear-gradient(135deg, ${C.muted}88 0 3px, ${C.muted}33 3px 6px)` }} />ainda previsto</span>
+              {fixosEst > 0 && <span>Saídas incluem {hidden ? "•••" : fmtBRL(fixosEst)} de fixos a lançar</span>}
             </div>
           ) : <span />}
           {nObs > 0 && (
@@ -3603,14 +3608,14 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
         {/* Orçamento agora vive dentro do card de projeção */}
 
                 {analise === "custos" && porFonte.length > 1 && (
-        <div className="in" style={{ background: C.card, boxShadow: sombraAn(), borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "40ms" }}>
+        <div className="in" style={{ background: C.card, boxShadow: sombraAn(), borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "40ms", display: "flex", flexDirection: "column", justifyContent: "center" }}>
           <div style={{ fontWeight: 700, fontSize: 13.5, color: C.ink, marginBottom: 12 }}>Custos por fonte — {mesLabel}</div>
-          <BarraEmpilhada dados={porFonte} corDe={fonteColor} hidden={hidden} nota={meiosMes.join(" · ")} totalLabel="Pago + a pagar" />
+          <BarraEmpilhada dados={porFonte} corDe={fonteColor} hidden={hidden} nota={meiosMes.join(" · ")} totalLabel="Lançado (pago + a pagar)" />
         </div>
         )}
 
                 {analise === "receitas" && porCategoria.length > 1 && (
-        <div className="in" style={{ background: C.card, boxShadow: sombraAn(), borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "120ms" }}>
+        <div className="in" style={{ background: C.card, boxShadow: sombraAn(), borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "120ms", display: "flex", flexDirection: "column", justifyContent: "center" }}>
           <div style={{ fontWeight: 700, fontSize: 13.5, color: C.ink, marginBottom: 12 }}>Receitas por título — {mesLabel}</div>
           <BarraEmpilhada dados={porCategoria} corDe={catColor} hidden={hidden} />
         </div>
@@ -3727,7 +3732,7 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
                   <strong style={{ color: variacoes[0].delta > 0 ? C.coral : C.emerald }}>
                     {variacoes[0].delta > 0 ? "+" : "−"}{hidden ? "•••" : fmtBRL(Math.abs(variacoes[0].delta))}
                   </strong>
-                  {variacoes[0].pct !== null && <span style={{ color: C.faint }}> ({variacoes[0].pct > 0 ? "+" : ""}{variacoes[0].pct.toFixed(0)}%)</span>}
+                  {variacoes[0].pct !== null && <span style={{ color: C.faint }}> ({fmtPct(variacoes[0].pct)})</span>}
                 </div>
               )}
             </>
@@ -3810,9 +3815,9 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
         </div>
         )}
 
-        {/* alignSelf: start — a short list must not be stretched to the height of its neighbour */}
+        {/* O card de PIX acompanha a altura do vizinho (a grade estica; o card preenche). */}
         {analise === "custos" && (
-        <div style={{ alignSelf: "start", display: "flex", flexDirection: "column", gap: 20 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
           <PixMesCard pix={pixMes} mesLabel={mesLabel} hidden={hidden} />
         </div>
         )}
@@ -4521,7 +4526,10 @@ function ReceitasTab({ receitas, onAdd, onRemove, onUpdate, inicioContagem, jump
         faixa={(
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-            <span style={{ fontSize: 11, fontWeight: 700, color: "#8B93B5", textTransform: "uppercase", letterSpacing: 0.5 }}>Recebidas</span>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%" }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: "#8B93B5", textTransform: "uppercase", letterSpacing: 0.5 }}>Recebidas</span>
+              <button type="button" className="tap" onClick={() => setShowRec(true)} style={{ fontSize: 11, fontWeight: 700, color: "#B8C2E8", background: "transparent", border: "none", cursor: "pointer", textTransform: "uppercase", letterSpacing: 0.5, fontFamily: "inherit", padding: 0 }}>Recorrentes ›</button>
+            </div>
             {pilulasRec.slice(0, 8).map(({ r, label }) => (
               <button key={r.id} type="button" className="tap" onClick={() => openEdit(r)} title="Abrir esta receita"
                 style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 700, padding: "4px 11px", borderRadius: 999, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.16)", color: "#E6EBFA", cursor: "pointer", fontFamily: "inherit" }}>
@@ -4530,7 +4538,6 @@ function ReceitasTab({ receitas, onAdd, onRemove, onUpdate, inicioContagem, jump
             ))}
             {pilulasRec.length > 8 && <span style={{ fontSize: 12, fontWeight: 700, color: "#8B93B5" }}>+{pilulasRec.length - 8}</span>}
             {pilulasRec.length === 0 && <span style={{ fontSize: 12, color: "#8B93B5" }}>nenhuma ainda</span>}
-            <button type="button" className="tap" onClick={() => setShowRec(true)} style={{ marginLeft: "auto", fontSize: 11, fontWeight: 700, color: "#B8C2E8", background: "transparent", border: "none", cursor: "pointer", textTransform: "uppercase", letterSpacing: 0.5, fontFamily: "inherit" }}>Recorrentes ›</button>
           </div>
           {esperadas.length > 0 && (
           <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
@@ -4672,7 +4679,7 @@ function MonthCard({ nome, pago, saldo, status, pctLiquidado, temDados, atual, f
           <ProgressBar pct={quitado ? 100 : pctLiquidado} height={6} />
           <div style={{ fontSize: 10.5, color: C.faint, marginTop: 5, whiteSpace: "nowrap" }}>{fmtBRL(pago)} pago</div>
           <div style={{ fontSize: 10.5, fontWeight: 700, marginTop: 1, whiteSpace: "nowrap", color: quitado ? C.emerald : C.faint }}>
-            {quitado ? "quitado" : `${pctLiquidado.toFixed(0)}% quitado`}
+            {quitado ? "quitado" : `${pctLiquidado.toFixed(0)}% previsto quitado`}
           </div>
           <div style={{ marginTop: 9 }}>
             <div style={{ fontSize: 10.5, color: C.muted, fontWeight: 600 }}>Saldo</div>
@@ -4745,7 +4752,6 @@ function ResumoTab({ custos, receitas, inicioContagem, onChangeInicio }) {
   }));
   const temCortada = chartData.some(d => !d.contado && d.temDados && d.Plot !== d.Saldo);
   const vazios = rows.filter(r => !r.temDados && r.mesKey !== currentMonth());
-  const nCards = rows.filter(r => r.temDados || r.mesKey === currentMonth()).length;
 
   return (
     <div>
@@ -4755,16 +4761,17 @@ function ResumoTab({ custos, receitas, inicioContagem, onChangeInicio }) {
         pct={anual.previsto > 0 ? (anual.pago / anual.previsto) * 100 : null}
         pctLabel={anual.previsto > 0 ? `${Math.round((anual.pago / anual.previsto) * 100)}% do previsto pago` : null}
         faixa={(
-          <div style={{ display: "flex", gap: 4 }} aria-label="Saldo de cada mês: verde positivo, coral negativo, esmaecido fora da contagem">
+          <div style={{ display: "flex", gap: 4 }} aria-label="Saldo de cada mês: verde positivo, coral negativo, barra cinza com dados fora da contagem, ponto pequeno sem dados">
             {rows.map((r, i) => {
               const contado = i >= inicioIdx && r.temDados;
-              const cor = !contado ? "rgba(255,255,255,0.18)" : saldoCor(r.saldo) === C.coral ? "#FF8A76" : saldoCor(r.saldo) === C.emerald ? "#4FE8BE" : "#B8C2E8";
+              const semDados = !r.temDados;
+              const cor = semDados ? "rgba(255,255,255,0.35)" : !contado ? "rgba(255,255,255,0.45)" : saldoCor(r.saldo) === C.coral ? "#FF8A76" : saldoCor(r.saldo) === C.emerald ? "#4FE8BE" : "#B8C2E8";
               const atual = r.mesKey === currentMonth();
               return (
                 <div key={r.mesKey || i} style={{ flex: 1, minWidth: 0, textAlign: "center", padding: "5px 0 6px", borderRadius: 9, background: atual ? "rgba(0,224,168,0.14)" : "rgba(255,255,255,0.04)", border: atual ? "1px solid rgba(0,224,168,0.5)" : "1px solid transparent" }}>
                   <div style={{ fontSize: 9.5, fontWeight: 700, color: atual ? "#4FE8BE" : "#8B93B5", letterSpacing: 0.3 }}>{r.mesAbr}</div>
                   <div style={{ height: 10, display: "flex", alignItems: "center", justifyContent: "center", marginTop: 3 }}>
-                    <span style={{ width: contado ? 14 : 8, height: contado ? 6 : 4, borderRadius: 3, background: cor, opacity: contado ? 1 : 0.7 }} />
+                    <span style={{ width: contado ? 14 : semDados ? 4 : 10, height: contado ? 6 : semDados ? 4 : 5, borderRadius: semDados ? 2 : 3, background: cor, opacity: contado ? 1 : semDados ? 0.5 : 0.85 }} />
                   </div>
                 </div>
               );
@@ -4812,7 +4819,7 @@ function ResumoTab({ custos, receitas, inicioContagem, onChangeInicio }) {
         </div>
       </div>
 
-      <div style={{ display: "grid", gap: 12, gridTemplateColumns: nCards >= 5 && nCards <= 6 ? "repeat(auto-fill, minmax(max(140px, calc((100% - 24px) / 3 - 0.5px)), 1fr))" : "repeat(auto-fill, minmax(140px, 1fr))" }}>
+      <div className="gridMeses">
         {rows.map((r, i) => r.temDados || r.mesKey === currentMonth() ? (
           <MonthCard key={r.mes} nome={r.mes} pago={r.totalPagoCusto} saldo={r.saldo} status={r.status}
             pctLiquidado={r.pctLiquidado} temDados={r.temDados} atual={r.mesKey === currentMonth()}
@@ -4905,7 +4912,7 @@ function MonthDetailModal({ resumo, custos, receitas, onClose }) {
                 fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, fontWeight: 700,
                 color: it.tipo === "custo" ? C.ink : C.emerald
               }}>
-                {it.tipo === "custo" ? "-" : "+"}{fmtBRL(it.valor)}
+                {it.tipo === "custo" ? "\u2212" : "+"}{fmtBRL(it.valor)}
               </div>
             </div>
           ))}
