@@ -1503,6 +1503,7 @@ export default function App() {
         @media (min-width: 680px) { .gridMeses { grid-template-columns: repeat(4, 1fr); } }
         .grid2 { display: grid; grid-template-columns: 1fr; gap: 20px; }
         @media (min-width: 680px) { .grid2 { grid-template-columns: 1fr 1fr; } .grid2 > * { margin-bottom: 0 !important; } }
+        @media (min-width: 680px) and (max-width: 1099px) { .grid2.igual { grid-auto-rows: 1fr; } }
         @media (min-width: 1100px) { .grid2 { grid-template-columns: 1fr 1fr 1fr; } }
         input[type="date"]::-webkit-date-and-time-value, input[type="month"]::-webkit-date-and-time-value { text-align: left; }
         .grid2c { display: grid; grid-template-columns: 1fr; gap: 20px; }
@@ -1906,7 +1907,7 @@ const saldoCor = (v) => Math.abs(v) < SALDO_NEUTRO ? C.lavender : v < 0 ? C.cora
 const fmtAtraso = (dias) => {
   if (!(dias > 0)) return "Atrasado";
   if (dias < 30) return `Atrasado há ${dias} ${dias === 1 ? "dia" : "dias"}`;
-  const meses = Math.floor(dias / 30);
+  const meses = Math.max(1, Math.round(dias / 30));
   return `Atrasado há ${meses} ${meses === 1 ? "mês" : "meses"}`;
 };
 
@@ -2333,7 +2334,7 @@ const FIXOS_INICIAIS = [
   { descricao: "Facul Rubem", dia: 10, valor: 1282.85, valorPago: 862.90, fonte: "" },
   { descricao: "Condomínio Via", dia: 10, valor: 813.47, fonte: "" },
   { descricao: "Condomínio Altos", dia: 10, valor: 688.57, fonte: "" },
-  { descricao: "Unimed", dia: 10, valor: null, fonte: "" },
+  { descricao: "Unimed", dia: 15, valor: null, fonte: "" },
   { descricao: "Pensão Rubem", dia: 5, valor: 1000, fonte: "" },
   { descricao: "Pensão Zannie", dia: 5, valor: 700, fonte: "" },
 ];
@@ -2751,7 +2752,7 @@ function PixMesCard({ pix, mesLabel, hidden }) {
             Só os lançados com fonte PIX; já somados na Conta Corrente.
             {nPend > 0 && !hidden ? ` Mais ${nPend} a pagar (${fmtBRL(totalPend)}).` : ""}
           </div>
-          {itens.slice(0, 5).map(c => (
+          {itens.slice(0, 7).map(c => (
             <div key={c.id} style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 12.5, padding: "5px 0", borderTop: `1px solid ${C.border}` }}>
               <span style={{ color: C.ink, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                 {c.descricao}<span style={{ color: C.faint }}> · {fmtDate(c.dataPagamento)}</span>
@@ -2759,7 +2760,7 @@ function PixMesCard({ pix, mesLabel, hidden }) {
               <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: C.muted, flexShrink: 0 }}>{hidden ? "•••" : fmtBRL(c.valorPago)}</span>
             </div>
           ))}
-          {itens.length > 5 && <div style={{ fontSize: 11, color: C.faint, paddingTop: 6 }}>+{itens.length - 5} mais</div>}
+          {itens.length > 7 && <div style={{ fontSize: 11, color: C.faint, paddingTop: 6 }}>+{itens.length - 7} mais</div>}
         </>
       )}
     </div>
@@ -2958,7 +2959,7 @@ function ProximosDiasCard({ itens, onOpenItem, onAcao, onSecundaria = null, hidd
               {it.valor ? <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: C.muted, flexShrink: 0 }}>{hidden ? "•••" : fmtBRL(it.valor)}</span> : (it.tipo === "Fixo" || (it.tipo === "Custo" && it.valor === 0)) ? <span style={{ fontSize: 11, color: C.faint, flexShrink: 0 }}>sem valor</span> : null}
               {onAcao && (
                 <button type="button" onClick={(e) => { e.stopPropagation(); onAcao(it); }}
-                  style={{ flexShrink: 0, height: 28, borderRadius: 14, border: `1px solid ${C.emerald}`, background: C.emeraldSoft, color: C.emerald, cursor: "pointer", fontSize: 11.5, fontWeight: 700, padding: "0 11px" }}>
+                  style={{ flexShrink: 0, height: 28, borderRadius: 14, border: `1px solid ${grupoUnico ? C.border : C.emerald}`, background: grupoUnico ? "transparent" : C.emeraldSoft, color: grupoUnico ? C.inkSoft : C.emerald, cursor: "pointer", fontSize: 11.5, fontWeight: 700, padding: "0 11px" }}>
                   {it.tipo === "Fixo" ? "Lançar" : it.tipo === "Custo" ? "Pagar" : "Concluir"}
                 </button>
               )}
@@ -3034,7 +3035,7 @@ function CentralAvisosModal({ central, sugestoes = null, hidden = false, onClose
         </div>
       )}
       {nSug > 0 && (
-        <div ref={sugRef} style={{ marginTop: 18, paddingTop: 12, borderTop: `1px solid ${C.border}`, paddingBottom: 6 }}>
+        <div ref={sugRef} style={{ marginTop: 28, paddingTop: 12, borderTop: `1px solid ${C.border}`, paddingBottom: 6 }}>
           <button type="button" className="tap" onClick={() => setSugAberto(a => !a)} aria-expanded={sugAberto}
             style={{ width: "100%", display: "flex", alignItems: "center", gap: 8, border: "none", background: "transparent", color: C.ink, cursor: "pointer", fontFamily: "inherit", padding: "4px 0", textAlign: "left" }}>
             <span style={{ fontWeight: 700, fontSize: 12.5, textTransform: "uppercase", letterSpacing: 0.4 }}>Sugestões do app</span>
@@ -3604,20 +3605,24 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
 
       <TilesAnalise itens={tilesAnalise} hidden={hidden} />
 
-      <div className="grid2" style={{ marginBottom: 20 }}>
+      <div className={analise === "custos" ? "grid2 igual" : "grid2"} style={{ marginBottom: 20 }}>
         {/* Orçamento agora vive dentro do card de projeção */}
 
                 {analise === "custos" && porFonte.length > 1 && (
-        <div className="in" style={{ background: C.card, boxShadow: sombraAn(), borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "40ms", display: "flex", flexDirection: "column", justifyContent: "center" }}>
+        <div className="in" style={{ background: C.card, boxShadow: sombraAn(), borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "40ms", display: "flex", flexDirection: "column" }}>
           <div style={{ fontWeight: 700, fontSize: 13.5, color: C.ink, marginBottom: 12 }}>Custos por fonte — {mesLabel}</div>
-          <BarraEmpilhada dados={porFonte} corDe={fonteColor} hidden={hidden} nota={meiosMes.join(" · ")} totalLabel="Lançado (pago + a pagar)" />
+          <div style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "center" }}>
+            <BarraEmpilhada dados={porFonte} corDe={fonteColor} hidden={hidden} nota={meiosMes.join(" · ")} totalLabel="Lançado (pago + a pagar)" />
+          </div>
         </div>
         )}
 
                 {analise === "receitas" && porCategoria.length > 1 && (
-        <div className="in" style={{ background: C.card, boxShadow: sombraAn(), borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "120ms", display: "flex", flexDirection: "column", justifyContent: "center" }}>
+        <div className="in" style={{ background: C.card, boxShadow: sombraAn(), borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "120ms", display: "flex", flexDirection: "column" }}>
           <div style={{ fontWeight: 700, fontSize: 13.5, color: C.ink, marginBottom: 12 }}>Receitas por título — {mesLabel}</div>
-          <BarraEmpilhada dados={porCategoria} corDe={catColor} hidden={hidden} />
+          <div style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "center" }}>
+            <BarraEmpilhada dados={porCategoria} corDe={catColor} hidden={hidden} />
+          </div>
         </div>
         )}
 
@@ -3708,11 +3713,11 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
                         <span style={{ fontSize: 13, fontWeight: 600, color: C.ink }}>{r.fonte}</span>
                         {Math.abs(d) > 0.005 && <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11.5, fontWeight: 700, color: d > 0 ? C.coral : C.emerald }}>{d > 0 ? "+" : "−"}{hidden ? "•••" : fmtBRL(Math.abs(d))}</span>}
                       </div>
-                      <div style={{ height: 5, borderRadius: 3, background: C.border, overflow: "hidden", marginBottom: 4 }}>
-                        <div style={{ width: `${(r.Anterior / mx) * 100}%`, height: "100%", borderRadius: 3, background: C.barCinza }} />
+                      <div style={{ height: 7, borderRadius: 4, background: C.border, overflow: "hidden", marginBottom: 4 }}>
+                        <div style={{ width: `${(r.Anterior / mx) * 100}%`, height: "100%", borderRadius: 4, background: C.barCinza }} />
                       </div>
-                      <div style={{ height: 8, borderRadius: 4, background: C.border, overflow: "hidden" }}>
-                        <div style={{ width: `${(r.Atual / mx) * 100}%`, height: "100%", borderRadius: 4, background: fonteColor(r.fonte) }} />
+                      <div style={{ height: 11, borderRadius: 6, background: C.border, overflow: "hidden" }}>
+                        <div style={{ width: `${(r.Atual / mx) * 100}%`, height: "100%", borderRadius: 6, background: fonteColor(r.fonte) }} />
                       </div>
                       <div style={{ display: "flex", justifyContent: "space-between", fontFamily: "'IBM Plex Mono', monospace", fontSize: 10.5, color: C.faint, marginTop: 3 }}>
                         <span>{hidden ? "•••" : fmtBRL(r.Anterior)}</span><span style={{ color: C.muted }}>{hidden ? "•••" : fmtBRL(r.Atual)}</span>
@@ -3879,6 +3884,130 @@ function agruparDivididos(items) {
   }));
 }
 
+/* ------------------------------------------------------------------ */
+/*  Painel "Pagar": janela curta para marcar um custo como pago        */
+/* ------------------------------------------------------------------ */
+function PagarModal({ custo, outros = [], onClose, onConfirm, onEditarTudo }) {
+  const hoje = todayISO();
+  const ontem = (() => { const d = new Date(); d.setDate(d.getDate() - 1); return localISO(d); })();
+  const [valor, setValor] = useState(Number(custo.valorPago) > 0 ? fmtValorInput(custo.valorPago) : (Number(custo.valorPrevisto) > 0 ? fmtValorInput(custo.valorPrevisto) : ""));
+  const [data, setData] = useState(hoje);
+  const [outra, setOutra] = useState(false);
+  const [fonte, setFonte] = useState(custo.fonte);
+  const [venc, setVenc] = useState(custo.vencimento || "");
+  const [prev, setPrev] = useState(Number(custo.valorPrevisto) > 0 ? fmtValorInput(custo.valorPrevisto) : "");
+  const [edVenc, setEdVenc] = useState(false);
+  const [edPrev, setEdPrev] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const valorRef = useRef(null);
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+  useEffect(() => { if (!valor && valorRef.current) { try { valorRef.current.focus(); } catch (e) {} } }, []);
+
+  const valorNum = valor === "" ? 0 : parseValorBR(valor);
+  const prevNum = prev === "" ? 0 : parseValorBR(prev);
+  const dif = valorNum - prevNum;
+  const pode = valorNum > 0 && !!data && !busy;
+  const d = diasAteVenc(custo.vencimento);
+  const situacao = d === null ? "" : d < 0 ? fmtAtraso(-d) : d === 0 ? "Vence hoje" : `Vence em ${d} ${d === 1 ? "dia" : "dias"}`;
+  const corSit = d !== null && d < 0 ? C.coral : C.amber;
+  const fontes = FONTES_FORM.includes(custo.fonte) ? FONTES_FORM : [custo.fonte, ...FONTES_FORM];
+  const dataCustom = outra || (data !== hoje && data !== ontem);
+  const txtBtn = C.page === "#0A0E1C" ? "#0A0E1C" : "#fff";
+  const rotulo = { fontSize: 10.5, fontWeight: 700, color: C.muted, letterSpacing: 0.6, textTransform: "uppercase", marginBottom: 6 };
+  const campo = { border: `1px solid ${C.border}`, borderRadius: 11, padding: "9px 11px", fontSize: 14, fontWeight: 700, color: C.ink, background: "transparent", fontFamily: "inherit", width: "100%", boxSizing: "border-box" };
+  const chip = (ativo) => ({ border: `1px solid ${ativo ? C.emerald : C.border}`, background: ativo ? C.emeraldSoft : "transparent", color: ativo ? C.emerald : C.inkSoft, cursor: "pointer", fontFamily: "inherit" });
+  const dados = () => ({ valorPago: valorNum, dataPagamento: data, fonte, vencimento: venc, valorPrevisto: prevNum });
+  const confirmarClick = async () => {
+    if (!pode) return;
+    setBusy(true);
+    try { await onConfirm(dados()); } finally { setBusy(false); }
+  };
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 600, background: "#0A0E1Cb8", display: "flex", alignItems: "center", justifyContent: "center", padding: 16, overflowY: "auto" }}>
+      <div onClick={e => e.stopPropagation()} role="dialog" aria-label={`Pagar ${custo.descricao}`}
+        style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 22, width: "100%", maxWidth: 400, maxHeight: "calc(100vh - 32px)", overflowY: "auto", padding: "20px 20px 16px", boxShadow: "0 24px 60px #000a", animation: "slideUp .2s ease-out", margin: "auto" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: C.emerald, letterSpacing: 0.6, textTransform: "uppercase" }}>Pagar</div>
+            <div style={{ fontSize: 23, fontWeight: 800, color: C.ink, marginTop: 1, overflow: "hidden", textOverflow: "ellipsis" }}>{custo.descricao}</div>
+            {situacao && <div style={{ fontSize: 12.5, fontWeight: 700, color: corSit, marginTop: 2 }}>{situacao}</div>}
+          </div>
+          <button type="button" onClick={onClose} aria-label="Fechar" style={{ width: 32, height: 32, borderRadius: "50%", border: "none", background: C.border, color: C.inkSoft, cursor: "pointer", flexShrink: 0, fontSize: 15, fontFamily: "inherit" }}>✕</button>
+        </div>
+        <div style={{ height: 1, background: C.border, margin: "14px 0" }} />
+
+        <div style={{ display: "flex", gap: 10, marginBottom: 14 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={rotulo}>Vencimento</div>
+            {edVenc
+              ? <input type="date" value={venc} onChange={e => setVenc(e.target.value)} style={campo} />
+              : <button type="button" onClick={() => setEdVenc(true)} style={{ ...campo, display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", textAlign: "left" }}>{venc ? fmtDate(venc) : "—"}<span style={{ fontSize: 10.5, color: C.emerald }}>editar</span></button>}
+          </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={rotulo}>Previsto</div>
+            {edPrev
+              ? <input type="text" inputMode="decimal" value={prev} onChange={e => setPrev(e.target.value)} placeholder="0,00" style={campo} />
+              : <button type="button" onClick={() => setEdPrev(true)} style={{ ...campo, display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", textAlign: "left", color: prevNum > 0 ? C.ink : C.faint }}>{prevNum > 0 ? fmtBRL(prevNum) : "sem valor"}<span style={{ fontSize: 10.5, color: C.emerald }}>editar</span></button>}
+          </div>
+        </div>
+
+        <div style={rotulo}>Valor pago</div>
+        <div style={{ border: `2px solid ${!valor ? C.emerald : C.border}`, borderRadius: 13, padding: "10px 14px", display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ color: C.faint, fontSize: 16, fontFamily: "'IBM Plex Mono', monospace" }}>R$</span>
+          <input ref={valorRef} type="text" inputMode="decimal" value={valor} onChange={e => setValor(e.target.value)} placeholder="0,00"
+            style={{ flex: 1, minWidth: 0, border: "none", outline: "none", background: "transparent", color: C.ink, fontFamily: "'IBM Plex Mono', monospace", fontSize: 28, fontWeight: 700 }} />
+        </div>
+        <div style={{ fontSize: 11.5, marginTop: 5, fontWeight: 600, color: !(valorNum > 0) ? C.muted : Math.abs(dif) > 0.005 && prevNum > 0 ? (dif > 0 ? C.amber : C.muted) : C.faint }}>
+          {!(valorNum > 0) ? (prevNum > 0 ? "Digite o valor pago." : "Sem previsto. Digite o valor pago.")
+            : prevNum > 0 && Math.abs(dif) > 0.005 ? `${dif > 0 ? "+" : "−"} ${fmtBRL(Math.abs(dif))} ${dif > 0 ? "acima" : "abaixo"} do previsto`
+            : prevNum > 0 ? "Igual ao previsto" : ""}
+        </div>
+
+        <div style={{ marginTop: 14 }}>
+          <div style={rotulo}>Data do pagamento</div>
+          <div style={{ display: "flex", gap: 7 }}>
+            {[["Hoje", hoje], ["Ontem", ontem]].map(([t, v]) => (
+              <button key={t} type="button" onClick={() => { setData(v); setOutra(false); }} style={{ ...chip(!dataCustom && data === v), flex: 1, padding: "9px 0", borderRadius: 999, fontSize: 13, fontWeight: 700 }}>{t}</button>
+            ))}
+            <button type="button" onClick={() => setOutra(true)} style={{ ...chip(dataCustom), flex: 1, padding: "9px 0", borderRadius: 999, fontSize: 13, fontWeight: 700 }}>{dataCustom && data !== hoje && data !== ontem ? fmtDate(data).slice(0, 5) : "Outra…"}</button>
+          </div>
+          {dataCustom && <input type="date" value={data} onChange={e => setData(e.target.value)} style={{ ...campo, marginTop: 8 }} />}
+        </div>
+
+        <div style={{ marginTop: 14 }}>
+          <div style={rotulo}>Fonte</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 7 }}>
+            {fontes.map(f => (
+              <button key={f} type="button" onClick={() => setFonte(f)} style={{ ...chip(fonte === f), display: "flex", alignItems: "center", gap: 7, padding: "9px 11px", borderRadius: 11, fontSize: 12.5, fontWeight: 700, textAlign: "left", color: fonte === f ? C.ink : C.inkSoft }}>
+                <i style={{ width: 9, height: 9, borderRadius: 3, background: fonteColor(f), flexShrink: 0 }} />{f}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {outros.length > 0 && (
+          <div style={{ marginTop: 12, fontSize: 11.5, lineHeight: 1.4, color: C.amberDeep, background: C.amberSoft, borderRadius: 10, padding: "8px 11px" }}>
+            Pagamento dividido: há outra fonte neste custo ({outros.map(o => `${o.fonte} · ${fmtBRL(o.valorPrevisto)}`).join(", ")}). O painel mexe só neste.
+          </div>
+        )}
+
+        <div style={{ marginTop: 14, fontSize: 11.5, color: C.muted, textAlign: "center" }}>
+          {custo.descricao} · {valorNum > 0 ? fmtBRL(valorNum) : "valor a informar"} · {data === hoje ? "hoje" : data === ontem ? "ontem" : fmtDate(data)} · {fonte}
+        </div>
+        <button type="button" disabled={!pode} onClick={confirmarClick}
+          style={{ marginTop: 8, width: "100%", height: 50, borderRadius: 14, border: "none", fontSize: 16, fontWeight: 800, fontFamily: "inherit", cursor: pode ? "pointer" : "not-allowed", background: pode ? C.emerald : C.border, color: pode ? txtBtn : C.faint }}>
+          {busy ? "Gravando…" : "Confirmar pagamento"}
+        </button>
+        <button type="button" className="tap" onClick={() => onEditarTudo(dados())} style={{ display: "block", margin: "10px auto 0", border: "none", background: "transparent", color: C.inkSoft, fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", padding: "4px 10px" }}>Editar tudo</button>
+      </div>
+    </div>
+  );
+}
+
 function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJump, fixos = [], fixosErro = false, onAddFixo, onUpdateFixo, onRemoveFixo }) {
   const [showFixos, setShowFixos] = useState(false);
   const [mesFiltro, setMesFiltro] = useState(currentMonth());
@@ -3941,6 +4070,7 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
       valorPrevisto: "", valorPago: "", fonte: FONTES[0], status: "Pendente", obs: "" };
   }
   const [form, setForm] = useState(blankCusto(mesFiltro));
+  const [pagarId, setPagarId] = useState(null);   // painel "Pagar" (janela curta); só grava no Confirmar
 
   const openNew = () => { setEditingId(null); setForm(blankCusto(mesFiltro)); setShowForm(true); };
   const formDeCusto = (c) => ({
@@ -3974,9 +4104,13 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
     if (!jumpTarget) return;
     const item = custos.find(c => c.id === jumpTarget.id);
     if (item) {
-      setMesFiltro(item.mes); openEdit(item);
-      // "Pagar" vindo do Início: abre o formulário já com Pago/hoje/valor previsto. Só grava quando você tocar em Salvar.
-      if (jumpTarget.pagar) setForm(f => ({ ...f, status: "Pago", dataPagamento: todayISO(), valorPago: f.valorPago || (item.valorPrevisto ? fmtValorInput(item.valorPrevisto) : "") }));
+      setMesFiltro(item.mes);
+      // "Pagar" vindo do Início/Central: abre o painel curto. Só grava quando você tocar em Confirmar pagamento.
+      if (jumpTarget.pagar && item.status !== "Pago") setPagarId(item.id);
+      else {
+        openEdit(item);
+        if (jumpTarget.pagar) setForm(f => ({ ...f, status: "Pago", dataPagamento: todayISO(), valorPago: f.valorPago || (item.valorPrevisto ? fmtValorInput(item.valorPrevisto) : "") }));
+      }
     }
     if (jumpTarget.lancarFixo) {
       const fx = fixos.find(x => x.descricao === jumpTarget.lancarFixo);
@@ -4075,9 +4209,29 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
   };
 
   // "Pagar" na linha: abre o MESMO formulário já preenchido (Pago, hoje, valor previsto). Só grava quando você tocar em Salvar e confirmar.
-  const pagarLinha = (c) => {
+  const pagarLinha = (c) => { setPagarId(c.id); };
+  // Confirmação do painel "Pagar": mesmas checagens do formulário (datas e valor), mesma gravação.
+  const confirmarPagamento = async (c, v) => {
+    if (v.vencimento !== (c.vencimento || "") && !(await confirmDateSanity(v.vencimento, "data de vencimento"))) return;
+    if (!(await confirmDateSanity(v.dataPagamento, "data de pagamento"))) return;
+    if (v.dataPagamento > todayISO() && !(await confirmar(`A data do pagamento (${fmtDate(v.dataPagamento)}) ainda não chegou. Marcar como Pago mesmo assim?`, { titulo: "Data no futuro", okLabel: "Está correta" }))) return;
+    let prevNum = v.valorPrevisto;
+    if (!(prevNum > 0)) prevNum = v.valorPago;
+    if (Number(c.valorPrevisto) !== prevNum) {
+      const mesAntC = shiftMonth(c.mes, -1);
+      const baseC = Math.max(0, ...custos.filter(x => x.mes === mesAntC && normDesc(x.descricao) === normDesc(c.descricao)).map(x => Number(x.valorPrevisto || x.valorPago || 0)));
+      if (baseC > 0 && prevNum >= baseC * 3 && prevNum - baseC >= 300
+        && !(await confirmar(`O valor previsto (${fmtBRL(prevNum)}) é mais de 3 vezes o de ${monthLabel(mesAntC)} (${fmtBRL(baseC)}) para "${c.descricao}".\n\nO valor está certo?`, { titulo: "Valor muito acima do normal", okLabel: "Está certo" }))) return;
+    }
+    const payload = { ...formDeCusto(c), vencimento: v.vencimento, valorPrevisto: prevNum, valorPago: v.valorPago, dataPagamento: v.dataPagamento, fonte: v.fonte, status: "Pago" };
+    await onUpdate(c.id, payload);
+    setPagarId(null);
+  };
+  // "Editar tudo" no painel: leva o que já foi digitado para o formulário completo (nada é gravado ainda).
+  const pagarParaFormulario = (c, v) => {
+    setPagarId(null);
     setEditingId(c.id);
-    setForm({ ...formDeCusto(c), status: "Pago", dataPagamento: todayISO(), valorPago: c.valorPago != null ? fmtValorInput(c.valorPago) : (c.valorPrevisto ? fmtValorInput(c.valorPrevisto) : "") });
+    setForm({ ...formDeCusto(c), status: "Pago", vencimento: v.vencimento, valorPrevisto: v.valorPrevisto > 0 ? fmtValorInput(v.valorPrevisto) : "", valorPago: v.valorPago > 0 ? fmtValorInput(v.valorPago) : "", dataPagamento: v.dataPagamento, fonte: v.fonte });
     setShowForm(true);
   };
   // One cost row. `embutido` = drawn inside the outline of a split cost (flatter, no own shadow).
@@ -4124,7 +4278,7 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
         )}
       </div>
       {c.status !== "Pago" && (
-        <button type="button" className="tap" onClick={(e) => { e.stopPropagation(); pagarLinha(c); }} title="Marcar como pago (abre o formulário preenchido)" style={{ border: `1px solid ${C.emerald}`, background: C.emeraldSoft, color: C.emerald, borderRadius: 10, padding: "6px 11px", fontSize: 12, fontWeight: 700, cursor: "pointer", flexShrink: 0, fontFamily: "inherit" }}>Pagar</button>
+        <button type="button" className="tap" onClick={(e) => { e.stopPropagation(); pagarLinha(c); }} title="Marcar como pago (abre o painel Pagar)" style={{ border: `1px solid ${C.emerald}`, background: C.emeraldSoft, color: C.emerald, borderRadius: 10, padding: "6px 11px", fontSize: 12, fontWeight: 700, cursor: "pointer", flexShrink: 0, fontFamily: "inherit" }}>Pagar</button>
       )}
       <button onClick={async (e) => { e.stopPropagation(); if (await confirmar("Remover este custo?", { perigo: true, okLabel: "Remover" })) onRemove(c.id); }} title="Remover" style={{
         border: "none", background: "transparent", color: C.faint, cursor: "pointer",
@@ -4291,6 +4445,12 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
       )}
 
 
+      {pagarId && (() => {
+        const pc = custos.find(x => x.id === pagarId);
+        if (!pc) return null;
+        const outros = custos.filter(x => x.id !== pc.id && x.mes === pc.mes && normDesc(x.descricao) === normDesc(pc.descricao));
+        return <PagarModal key={pc.id} custo={pc} outros={outros} onClose={() => setPagarId(null)} onConfirm={(v) => confirmarPagamento(pc, v)} onEditarTudo={(v) => pagarParaFormulario(pc, v)} />;
+      })()}
       {showFixos && <FixosModal fixos={fixos} custos={custos} mes={mesFiltro} onLancar={(fx, pago) => { setShowFixos(false); lancarFixo(fx, pago); }} onAdd={onAddFixo} onUpdate={onUpdateFixo} onRemove={onRemoveFixo} onClose={() => setShowFixos(false)} />}
 
       {showForm && (
@@ -4757,7 +4917,7 @@ function ResumoTab({ custos, receitas, inicioContagem, onChangeInicio }) {
     <div>
       <TabHero titulo="Resumo anual" mesLabel={String(ano)}
         destaque={{ rotulo: inicioIdx > 0 ? `Saldo desde ${MESES_ABR[inicioIdx]}` : "Saldo do ano", valor: fmtBRL(anual.recebido - anual.pago), cor: anual.recebido - anual.pago < 0 ? "#FF8A76" : "#4FE8BE", sub: null }}
-        chips={[{ t: `Recebido ${fmtBRL(anual.recebido)}`, cor: "#4FE8BE" }, { t: `Pago ${fmtBRL(anual.pago)}`, cor: "#FF8A76" }, { t: `Previsto ${fmtBRL(anual.previsto)}` }]}
+        chips={[{ t: `Recebido ${fmtBRL(anual.recebido)}`, cor: "#4FE8BE" }, { t: `Pago ${fmtBRL(anual.pago)}` }, { t: `Previsto ${fmtBRL(anual.previsto)}` }]}
         pct={anual.previsto > 0 ? (anual.pago / anual.previsto) * 100 : null}
         pctLabel={anual.previsto > 0 ? `${Math.round((anual.pago / anual.previsto) * 100)}% do previsto pago` : null}
         faixa={(
