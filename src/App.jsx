@@ -724,7 +724,7 @@ function useMesCorrenteAuto(setMes) {
   }, []);
 }
 
-function Modal({ title, onClose, children, footer, headerExtra }) {
+function Modal({ title, onClose, children, footer, headerExtra, alto = false }) {
   // Enquanto há janela aberta, o "+" rápido some (a ponta dele aparecia na borda da janela).
   useEffect(() => {
     document.body.classList.add("modal-aberto");
@@ -734,12 +734,12 @@ function Modal({ title, onClose, children, footer, headerExtra }) {
     <div style={{
       position: "fixed", inset: 0, background: "#151A2E99", zIndex: 50,
       display: "flex", alignItems: "flex-end", justifyContent: "center",
-      padding: "0 0 min(5vh, 36px)"
+      padding: alto ? "0 0 10px" : "0 0 min(5vh, 36px)"
     }} onClick={onClose}>
       <div
         onClick={e => e.stopPropagation()}
         style={{
-          background: C.card, width: "100%", maxWidth: "min(96vw, 1040px)", maxHeight: "90vh",
+          background: C.card, width: "100%", maxWidth: "min(96vw, 1040px)", maxHeight: alto ? "calc(100vh - 20px)" : "90vh", minHeight: alto ? "88vh" : undefined,
           borderRadius: 24, overflow: "hidden", display: "flex", flexDirection: "column",
           boxShadow: "0 -8px 30px #0004", animation: "slideUp .25s ease-out"
         }}
@@ -2112,11 +2112,35 @@ function AttentionCard({ itens, onNavigate, onConcluirDemanda, title = "Precisa 
   );
 }
 
+// Ícones próprios (SVG simples), para os títulos de card. Não dependem da biblioteca de ícones.
+function IcoBase({ size = 16, color = "currentColor", style = undefined, children }) {
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={style}>{children}</svg>;
+}
+const IcoDonut = (p) => <IcoBase {...p}><circle cx="12" cy="12" r="9" /><path d="M12 3v9l7.8 4.5" /></IcoBase>;
+const IcoBarras = (p) => <IcoBase {...p}><path d="M5 20V10M12 20V4M19 20v-7" /></IcoBase>;
+const IcoLinha = (p) => <IcoBase {...p}><path d="M3 17l6-6 4 4 8-9" /></IcoBase>;
+const IcoLista = (p) => <IcoBase {...p}><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" /></IcoBase>;
+const IcoTroca = (p) => <IcoBase {...p}><path d="M4 8h16l-4-4M20 16H4l4 4" /></IcoBase>;
+const IcoRaio = (p) => <IcoBase {...p}><path d="M13 2L4 14h7l-1 8 9-12h-7l1-8z" /></IcoBase>;
+const IcoAlvo = (p) => <IcoBase {...p}><circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="4" /></IcoBase>;
+// Título padrão dos cards: ícone + CAIXA ALTA; o mês (ou detalhe) vai pequeno e apagado.
+function TituloCard({ Icone, children, direita = null, sufixo = null, sub = null, mb = 12 }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: mb, minWidth: 0 }}>
+      {Icone && <Icone size={16} color={C.lavender} style={{ flexShrink: 0 }} />}
+      <span style={{ fontWeight: 700, fontSize: 13, color: C.ink, textTransform: "uppercase", letterSpacing: 0.4, minWidth: 0 }}>{children}</span>
+      {sufixo && <span style={{ fontSize: 11, color: C.faint, fontWeight: 500, whiteSpace: "nowrap" }}>· {sufixo}</span>}
+      {sub && <span style={{ fontWeight: 500, fontSize: 11.5, color: C.faint }}>{sub}</span>}
+      {direita && <span style={{ marginLeft: "auto", fontSize: 11, color: C.faint, fontWeight: 500, whiteSpace: "nowrap" }}>{direita}</span>}
+    </div>
+  );
+}
+
 function ProjBar({ label, done, pending, color, max, hidden }) {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
       <span style={{ width: 62, fontSize: 11.5, fontWeight: 700, color: C.muted, textTransform: "uppercase", letterSpacing: 0.3 }}>{label}</span>
-      <div style={{ flex: 1, height: 14, borderRadius: 7, background: C.border, overflow: "hidden", display: "flex" }}>
+      <div style={{ flex: 1, height: 28, borderRadius: 14, background: C.border, overflow: "hidden", display: "flex" }}>
         <div style={{ width: `${(done / max) * 100}%`, background: color }} />
         <div style={{ width: `${(pending / max) * 100}%`, background: `repeating-linear-gradient(135deg, ${color}88 0 6px, ${color}33 6px 12px)` }} />
       </div>
@@ -2732,14 +2756,11 @@ function ProximoVencLed({ info, onOpen, entrada = false }) {
   );
 }
 
-function PixMesCard({ pix, mesLabel, hidden }) {
+function PixMesCard({ pix, mesLabel, hidden, onVerTodos = null }) {
   const { n, total, nPend, totalPend, itens } = pix;
   return (
     <div className="in" style={{ background: C.card, boxShadow: shadowSm, borderRadius: 16, padding: 16, flex: 1 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, marginBottom: 4 }}>
-        <span style={{ fontWeight: 700, fontSize: 12.5, color: C.ink, textTransform: "uppercase", letterSpacing: 0.4 }}>PIX do mês</span>
-        <span style={{ fontSize: 11, color: C.faint }}>{mesLabel}</span>
-      </div>
+      <TituloCard Icone={IcoRaio} direita={mesLabel} mb={4}>PIX do mês</TituloCard>
       {n === 0 && nPend === 0 ? (
         <div style={{ fontSize: 13, color: C.muted, padding: "10px 0 4px" }}>Nenhum PIX registrado neste mês.</div>
       ) : (
@@ -2760,7 +2781,9 @@ function PixMesCard({ pix, mesLabel, hidden }) {
               <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: C.muted, flexShrink: 0 }}>{hidden ? "•••" : fmtBRL(c.valorPago)}</span>
             </div>
           ))}
-          {itens.length > 7 && <div style={{ fontSize: 11, color: C.faint, paddingTop: 6 }}>+{itens.length - 7} mais</div>}
+          {itens.length > 7 && (onVerTodos
+            ? <button type="button" className="tap" onClick={onVerTodos} style={{ border: "none", background: "transparent", cursor: "pointer", fontFamily: "inherit", fontSize: 11.5, fontWeight: 700, color: C.emerald, padding: "8px 0 2px" }}>+{itens.length - 7} mais · ver todos em Custos ›</button>
+            : <div style={{ fontSize: 11, color: C.faint, paddingTop: 6 }}>+{itens.length - 7} mais</div>)}
         </>
       )}
     </div>
@@ -2872,11 +2895,11 @@ function TabHero({ titulo, mesLabel, onLabelClick, destaque, pct = null, pctLabe
   );
 }
 
-function BarraEmpilhada({ dados, corDe, hidden, nota, totalLabel = "Total" }) {
+function BarraEmpilhada({ dados, corDe, hidden, nota, totalLabel = "Total", altura = 40, espaco = 8 }) {
   const total = dados.reduce((t, d) => t + d.value, 0) || 1;
   return (
     <div>
-      <div style={{ display: "flex", height: 40, borderRadius: 12, overflow: "hidden", gap: 2, marginBottom: 14 }}>
+      <div style={{ display: "flex", height: altura, borderRadius: 12, overflow: "hidden", gap: 2, marginBottom: 16 }}>
         {dados.map(d => (
           <div key={d.name} title={d.name} style={{ width: `${(d.value / total) * 100}%`, minWidth: 3, background: corDe(d.name), position: "relative", overflow: "hidden" }}>
             {d.pend > 0 && d.value > 0 && <div style={{ position: "absolute", right: 0, top: 0, bottom: 0, width: `${Math.min(100, (d.pend / d.value) * 100)}%`, background: "repeating-linear-gradient(135deg, rgba(10,14,28,0.55) 0 4px, transparent 4px 8px)" }} />}
@@ -2887,7 +2910,7 @@ function BarraEmpilhada({ dados, corDe, hidden, nota, totalLabel = "Total" }) {
         <span style={{ fontSize: 11, fontWeight: 700, color: C.faint, textTransform: "uppercase", letterSpacing: 0.5 }}>{totalLabel}</span>
         <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 14, fontWeight: 700, color: C.ink }}>{hidden ? "•••" : fmtBRL(total)}</span>
       </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: espaco }}>
         {dados.map(d => (
           <div key={d.name} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5 }}>
             <span style={{ width: 9, height: 9, borderRadius: 3, background: corDe(d.name), flexShrink: 0 }} />
@@ -2986,13 +3009,20 @@ function ProximosDiasCard({ itens, onOpenItem, onAcao, onSecundaria = null, hidd
 // Central de avisos: atrasados e o que vence nos próximos 14 dias (+ tarefas paradas há muito tempo, recolhidas).
 // Fica no nível do App para abrir por cima de qualquer aba, sem trocar de aba.
 function CentralAvisosModal({ central, sugestoes = null, hidden = false, onClose, onNavigate, onConcluirDemanda, onExcluirDemanda }) {
-  const [paradosAberto, setParadosAberto] = useState(false);
-  const [sugAberto, setSugAberto] = useState(false);
+  // Lembra, neste aparelho, se "Paradas" e "Sugestões" ficaram abertas.
+  const lerFlag = (k) => { try { return localStorage.getItem(k) === "1"; } catch (e) { return false; } };
+  const gravarFlag = (k, v) => { try { localStorage.setItem(k, v ? "1" : "0"); } catch (e) { /* sem armazenamento */ } };
+  const [paradosAberto, setParadosRaw] = useState(() => lerFlag("pt_central_paradas"));
+  const [sugAberto, setSugRaw] = useState(() => lerFlag("pt_central_sug"));
+  const setParadosAberto = (fn) => setParadosRaw(a => { const n = typeof fn === "function" ? fn(a) : fn; gravarFlag("pt_central_paradas", n); return n; });
+  const setSugAberto = (fn) => setSugRaw(a => { const n = typeof fn === "function" ? fn(a) : fn; gravarFlag("pt_central_sug", n); return n; });
+  const montadoRef = useRef(false);
   // Ao abrir uma seção no fim da janela, rola até ela: o conteúdo novo nascia abaixo da borda e parecia que "não abriu".
   const parRef = useRef(null);
   const sugRef = useRef(null);
-  useEffect(() => { if (!paradosAberto) return undefined; const h = setTimeout(() => { try { if (parRef.current) parRef.current.scrollIntoView({ behavior: "smooth", block: "nearest" }); } catch (e) { /* sem rolagem */ } }, 80); return () => clearTimeout(h); }, [paradosAberto]);
-  useEffect(() => { if (!sugAberto) return undefined; const h = setTimeout(() => { try { if (sugRef.current) sugRef.current.scrollIntoView({ behavior: "smooth", block: "nearest" }); } catch (e) { /* sem rolagem */ } }, 80); return () => clearTimeout(h); }, [sugAberto]);
+  useEffect(() => { if (!montadoRef.current || !paradosAberto) return undefined; const h = setTimeout(() => { try { if (parRef.current) parRef.current.scrollIntoView({ behavior: "smooth", block: "nearest" }); } catch (e) { /* sem rolagem */ } }, 80); return () => clearTimeout(h); }, [paradosAberto]);
+  useEffect(() => { if (!montadoRef.current || !sugAberto) return undefined; const h = setTimeout(() => { try { if (sugRef.current) sugRef.current.scrollIntoView({ behavior: "smooth", block: "nearest" }); } catch (e) { /* sem rolagem */ } }, 80); return () => clearTimeout(h); }, [sugAberto]);
+  useEffect(() => { montadoRef.current = true; }, []);
   const [ign, setIgn] = useState(lerSugIgn);
   const ignorar = (k) => setIgn(l => { const n = [...l, k].slice(-200); try { localStorage.setItem(SUG_KEY, JSON.stringify(n)); } catch (e) { /* sem armazenamento: só não lembra */ } return n; });
   const sugRec = sugestoes ? sugestoes.recorrentes.filter(x => !ign.includes(x.key)).slice(0, 6) : [];
@@ -3000,7 +3030,7 @@ function CentralAvisosModal({ central, sugestoes = null, hidden = false, onClose
   const nSug = sugRec.length + sugFora.length;
   const btnIgn = (k) => <button type="button" className="tap" onClick={() => ignorar(k)} style={{ border: `1px solid ${C.border}`, background: "transparent", color: C.muted, borderRadius: 12, height: 26, padding: "0 10px", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", flexShrink: 0 }}>Ignorar</button>;
   return (
-    <Modal title="Central de avisos" onClose={onClose}>
+    <Modal title="Central de avisos" onClose={onClose} alto>
       <div style={{ fontSize: 11.5, color: C.faint, marginBottom: 10 }}>Atrasados e tudo o que vence nos próximos 14 dias.</div>
       <ProximosDiasCard central itens={central.itens} hidden={hidden}
         onSecundaria={(it) => it.tipo === "Fixo" ? dispensarFixo(it.fixoRef, currentMonth()) : (onExcluirDemanda && onExcluirDemanda(it.rawId))}
@@ -3035,14 +3065,14 @@ function CentralAvisosModal({ central, sugestoes = null, hidden = false, onClose
         </div>
       )}
       {nSug > 0 && (
-        <div ref={sugRef} style={{ marginTop: 28, paddingTop: 12, borderTop: `1px solid ${C.border}`, paddingBottom: 6 }}>
+        <div ref={sugRef} style={{ marginTop: 18, paddingTop: 12, borderTop: `1px solid ${C.border}`, paddingBottom: 6 }}>
           <button type="button" className="tap" onClick={() => setSugAberto(a => !a)} aria-expanded={sugAberto}
             style={{ width: "100%", display: "flex", alignItems: "center", gap: 8, border: "none", background: "transparent", color: C.ink, cursor: "pointer", fontFamily: "inherit", padding: "4px 0", textAlign: "left" }}>
             <span style={{ fontWeight: 700, fontSize: 12.5, textTransform: "uppercase", letterSpacing: 0.4 }}>Sugestões do app</span>
             <span style={{ fontSize: 11, fontWeight: 700, color: C.muted, background: C.border, borderRadius: 10, padding: "1px 8px" }}>{nSug}</span>
             <ChevronDown size={18} color={C.muted} style={{ marginLeft: "auto", transform: sugAberto ? "rotate(180deg)" : "none", transition: "transform .2s ease" }} />
           </button>
-          <div style={{ fontSize: 11.5, color: C.faint, margin: "2px 0 6px" }}>O app só sugere, você decide. Não entram na contagem de avisos.</div>
+          <div style={{ fontSize: 11.5, color: C.faint, margin: "2px 0 16px" }}>O app só sugere, você decide. Não entram na contagem de avisos.</div>
           {sugAberto && <>
             {sugFora.length > 0 && (
               <ObsBloco titulo="Acima do habitual" nota="Lançamentos deste mês bem acima do que o mesmo item costuma custar (média dos últimos meses).">
@@ -3534,7 +3564,7 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
       <div className="in" style={{ background: C.card, boxShadow: shadowSm, borderRadius: 18, padding: "20px 22px", marginBottom: 20 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12, marginBottom: 16 }}>
           <div>
-            <div style={{ fontWeight: 700, fontSize: 13.5, color: C.ink }}>Projeção de fechamento — {mesLabel}</div>
+            <TituloCard Icone={TrendingUp} sufixo={mesLabel} mb={0}>Projeção de fechamento</TituloCard>
             <div style={{ fontSize: 11.5, color: C.faint, marginTop: 3 }}>{projQuitado ? "Tudo o que foi lançado já foi pago e recebido" : projEstimada ? ((fixosEst > 0 || receitasEstTotal > 0) ? "Estimativa: o previsto mais fixos e receitas habituais ainda não lançados" : "Estimativa: o previsto, com custos sem valor estimados pelo último pago") : "Se tudo o que está previsto for pago e recebido"}</div>
           </div>
           <div style={{ textAlign: "right" }}>
@@ -3577,10 +3607,10 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
               <div style={{ fontSize: 11, color: C.faint, marginBottom: 8 }}>
                 Comparado ao que você normalmente já tinha pago até o dia {ritmo.diaRef}, nos últimos {ritmo.nMeses === 1 ? "mês" : `${ritmo.nMeses} meses`} — não à média do mês inteiro
               </div>
-              <div style={{ position: "relative", height: 10, borderRadius: 5, background: C.border, margin: "6px 0 18px" }}>
-                <div style={{ height: "100%", width: `${Math.min(ritmo.pct, 200) / 2}%`, borderRadius: 5, background: Math.round(ritmo.pct) > 150 ? "linear-gradient(90deg,#FFB929,#FF5A68)" : Math.round(ritmo.pct) > 100 ? "linear-gradient(90deg,#FFC53D,#FFB929)" : "linear-gradient(90deg,#00E0A8,#22D3EE)" }} />
-                <div style={{ position: "absolute", left: "50%", top: -4, bottom: -4, width: 2, borderRadius: 1, background: C.ink, opacity: 0.55 }} />
-                <span style={{ position: "absolute", left: "50%", top: 14, transform: "translateX(-50%)", fontSize: 10, color: C.faint }}>normal</span>
+              <div style={{ position: "relative", height: 15, borderRadius: 8, background: C.border, margin: "6px 0 26px" }}>
+                <div style={{ height: "100%", width: `${Math.min(ritmo.pct, 200) / 2}%`, borderRadius: 8, background: Math.round(ritmo.pct) > 150 ? "linear-gradient(90deg,#FFB929,#FF5A68)" : Math.round(ritmo.pct) > 100 ? "linear-gradient(90deg,#FFC53D,#FFB929)" : "linear-gradient(90deg,#00E0A8,#22D3EE)" }} />
+                <div style={{ position: "absolute", left: "50%", top: -5, bottom: -5, width: 2, borderRadius: 1, background: C.ink, opacity: 0.55 }} />
+                <span style={{ position: "absolute", left: "50%", top: 21, transform: "translateX(-50%)", fontSize: 10, color: C.faint }}>normal</span>
               </div>
               <div style={{ fontSize: 11, color: C.faint, marginTop: 8 }}>
                 {ehMesCorrente ? "Pago até agora" : "Pago no mês"}: <strong style={{ color: C.ink }}>{hidden ? "•••" : fmtBRL(ritmo.pagoAteAgora)}</strong>
@@ -3610,18 +3640,18 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
 
                 {analise === "custos" && porFonte.length > 1 && (
         <div className="in" style={{ background: C.card, boxShadow: sombraAn(), borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "40ms", display: "flex", flexDirection: "column" }}>
-          <div style={{ fontWeight: 700, fontSize: 13.5, color: C.ink, marginBottom: 12 }}>Custos por fonte — {mesLabel}</div>
+          <TituloCard Icone={IcoDonut} direita={mesLabel}>Custos por fonte</TituloCard>
           <div style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "center" }}>
-            <BarraEmpilhada dados={porFonte} corDe={fonteColor} hidden={hidden} nota={meiosMes.join(" · ")} totalLabel="Lançado (pago + a pagar)" />
+            <BarraEmpilhada altura={60} espaco={11} dados={porFonte} corDe={fonteColor} hidden={hidden} nota={meiosMes.join(" · ")} totalLabel="Lançado (pago + a pagar)" />
           </div>
         </div>
         )}
 
                 {analise === "receitas" && porCategoria.length > 1 && (
         <div className="in" style={{ background: C.card, boxShadow: sombraAn(), borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "120ms", display: "flex", flexDirection: "column" }}>
-          <div style={{ fontWeight: 700, fontSize: 13.5, color: C.ink, marginBottom: 12 }}>Receitas por título — {mesLabel}</div>
+          <TituloCard Icone={IcoDonut} direita={mesLabel}>Receitas por título</TituloCard>
           <div style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "center" }}>
-            <BarraEmpilhada dados={porCategoria} corDe={catColor} hidden={hidden} />
+            <BarraEmpilhada altura={60} espaco={11} dados={porCategoria} corDe={catColor} hidden={hidden} />
           </div>
         </div>
         )}
@@ -3629,7 +3659,7 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
         {analise === "evolucao" && (
         <div className="in" style={{ background: C.card, boxShadow: sombraAn(), borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "160ms", display: "flex", flexDirection: "column", alignSelf: "stretch" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
-            <span style={{ fontWeight: 700, fontSize: 13.5, color: C.ink }}>Pago x Recebido <span style={{ fontWeight: 500, fontSize: 11.5, color: C.faint }}>· toque num mês para abri-lo</span></span>
+            <TituloCard Icone={IcoBarras} sub="· toque num mês para abri-lo" mb={0}>Pago x Recebido</TituloCard>
             <span style={{ display: "flex", gap: 10, fontSize: 11, color: C.muted, fontWeight: 600 }}>
               <span style={{ display: "flex", alignItems: "center", gap: 4 }}><span style={{ width: 8, height: 8, borderRadius: 2, background: "#E8434F" }} />Pago</span>
               <span style={{ display: "flex", alignItems: "center", gap: 4 }}><span style={{ width: 8, height: 8, borderRadius: 2, background: "#00B98A" }} />Recebido</span>
@@ -3669,7 +3699,7 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
 
         {analise === "custos" && (
         <div className="in" style={{ background: C.card, boxShadow: sombraAn(), borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "200ms" }}>
-          <div style={{ fontWeight: 700, fontSize: 13.5, color: C.ink, marginBottom: 10 }}>Maiores custos — {mesLabel}</div>
+          <TituloCard Icone={IcoLista} direita={mesLabel} mb={10}>Maiores custos</TituloCard>
           {topCustos.length === 0 ? (
             <div style={{ color: C.muted, fontSize: 13, padding: "16px 0", textAlign: "center" }}>Sem custos lançados neste mês.</div>
           ) : (
@@ -3697,8 +3727,8 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
 
         {analise === "custos" && (
         <div className="in" style={{ background: C.card, boxShadow: sombraAn(), borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "240ms", display: "flex", flexDirection: "column" }}>
-          <div style={{ fontWeight: 700, fontSize: 13.5, color: C.ink, marginBottom: 4 }}>Este mês x mês anterior — por fonte</div>
-          <div style={{ fontSize: 11.5, color: C.faint, marginBottom: 10 }}>{diaCorteComp !== null ? `${monthLabel(mesAnterior)} até o dia ${diaCorteComp} (cinza) x ${mesLabel} até hoje` : `${monthLabel(mesAnterior)} (cinza) x ${mesLabel}`}</div>
+          <TituloCard Icone={IcoTroca} mb={4}>Este mês x anterior</TituloCard>
+          <div style={{ fontSize: 11.5, color: C.faint, marginBottom: 10 }}>Por fonte · {diaCorteComp !== null ? `${monthLabel(mesAnterior)} até o dia ${diaCorteComp} (cinza) x ${mesLabel} até hoje` : `${monthLabel(mesAnterior)} (cinza) x ${mesLabel}`}</div>
           {comparativo.length === 0 ? (
             <div style={{ color: C.muted, fontSize: 13, padding: "16px 0", textAlign: "center" }}>Sem custos nos dois meses para comparar.</div>
           ) : (
@@ -3747,8 +3777,8 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
 
         {analise === "evolucao" && movConta.rows.length >= 2 && movConta.contas.length > 0 && (
         <div className="in" style={{ background: C.card, boxShadow: sombraAn(), borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "280ms", display: "flex", flexDirection: "column", alignSelf: "stretch" }}>
-          <div style={{ fontWeight: 700, fontSize: 13.5, color: C.ink, marginBottom: 4 }}>Movimento acumulado por conta</div>
-          <div style={{ fontSize: 11.5, color: C.faint, marginBottom: 10 }}>Entradas menos saídas de cada conta desde {MESES[inicioIdx].toLowerCase()} (movimento, sem saldo inicial)</div>
+          <TituloCard Icone={IcoLinha} mb={4}>Movimento por conta</TituloCard>
+          <div style={{ fontSize: 11.5, color: C.faint, marginBottom: 10 }}>Acumulado: entradas menos saídas de cada conta desde {MESES[inicioIdx].toLowerCase()} (movimento, sem saldo inicial)</div>
           <div style={{ display: "flex", gap: 12, flexWrap: "wrap", fontSize: 11.5, fontWeight: 600, color: C.muted, marginBottom: 6 }}>
             {movConta.contas.map(k => {
               const ult = movConta.rows[movConta.rows.length - 1][k];
@@ -3790,12 +3820,12 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
         )}
         {analise === "receitas" && (
         <div className="in" style={{ background: C.card, boxShadow: sombraAn(), borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "320ms" }}>
-          <div style={{ fontWeight: 700, fontSize: 13.5, color: C.ink, marginBottom: 4 }}>Receitas previstas x recebidas — {mesLabel}</div>
+          <TituloCard Icone={IcoAlvo} direita={mesLabel} mb={4}>Previsto x recebido</TituloCard>
           <div style={{ fontSize: 11.5, color: C.faint, marginBottom: 10 }}>O que já entrou, sobre o que estava previsto</div>
           {receitasComparativo.length === 0 ? (
             <div style={{ color: C.muted, fontSize: 13, padding: "16px 0", textAlign: "center" }}>Sem receitas lançadas neste mês.</div>
           ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 28 }}>
               {receitasComparativo.map(r => {
                 const pct = r.Previsto > 0 ? Math.min(100, (r.Recebido / r.Previsto) * 100) : (r.Recebido > 0 ? 100 : 0);
                 const falta = r.Previsto - r.Recebido;
@@ -3808,8 +3838,8 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
                         <span style={{ color: C.faint }}> de {hidden ? "•••" : fmtBRL(r.Previsto)}</span>
                       </span>
                     </div>
-                    <div style={{ height: 7, borderRadius: 4, background: C.border, overflow: "hidden" }}>
-                      <div style={{ width: `${pct}%`, height: "100%", borderRadius: 4, background: "linear-gradient(90deg, #00E0A8, #22D3EE)" }} />
+                    <div style={{ height: 11, borderRadius: 6, background: C.border, overflow: "hidden" }}>
+                      <div style={{ width: `${pct}%`, height: "100%", borderRadius: 6, background: "linear-gradient(90deg, #00E0A8, #22D3EE)" }} />
                     </div>
                     {falta > 0.005 && <div style={{ fontSize: 11, color: C.faint, marginTop: 4 }}>{r.Pendente ? "falta " : ""}{hidden ? "•••" : fmtBRL(falta)}{r.Pendente ? "" : " abaixo do previsto"}</div>}
                   </div>
@@ -3823,7 +3853,7 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
         {/* O card de PIX acompanha a altura do vizinho (a grade estica; o card preenche). */}
         {analise === "custos" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-          <PixMesCard pix={pixMes} mesLabel={mesLabel} hidden={hidden} />
+          <PixMesCard pix={pixMes} mesLabel={mesLabel} hidden={hidden} onVerTodos={() => onNavigate && onNavigate("custos", null, { fonte: "PIX", mes: mesAtual })} />
         </div>
         )}
       </div>
@@ -4119,6 +4149,7 @@ function CustosTab({ custos, onAdd, onRemove, onUpdate, jumpTarget, onConsumeJum
     }
     if (jumpTarget.novo) openNew();
     if (jumpTarget.abrirFixos) setShowFixos(true);
+    if (jumpTarget.fonte) { setFonteFiltro(jumpTarget.fonte); if (jumpTarget.mes) setMesFiltro(jumpTarget.mes); }
     onConsumeJump();
   }, [jumpTarget]);
 
@@ -4678,18 +4709,15 @@ function ReceitasTab({ receitas, onAdd, onRemove, onUpdate, inicioContagem, jump
           ? { rotulo: "A receber", valor: fmtBRL(totals.aReceber), cor: "#FFC53D", sub: `Recebido ${fmtBRL(totals.totalRecebido)} de ${fmtBRL(totals.totalPrevisto)}` }
           : { rotulo: "Recebido no mês", valor: fmtBRL(totals.totalRecebido), cor: "#4FE8BE", sub: `de ${fmtBRL(totals.totalPrevisto)} previsto${totals.diferenca < -0.005 ? ` · ${fmtBRL(-totals.diferenca)} abaixo do previsto` : ""}` }}
         chips={[
-          ...(totals.recebidas > 0 ? [{ t: `${totals.recebidas} ${totals.recebidas === 1 ? "recebida" : "recebidas"}`, cor: "#4FE8BE" }] : []),
-          ...(totals.pendentes > 0 ? [{ t: `${totals.pendentes} ${totals.pendentes === 1 ? "pendente" : "pendentes"}`, cor: "#FFC53D" }] : [])
+          ...(totals.recebidas > 0 ? [{ t: `${totals.recebidas} ${totals.recebidas === 1 ? "RECEBIDA" : "RECEBIDAS"}`, cor: "#4FE8BE" }] : []),
+          ...(totals.pendentes > 0 ? [{ t: `${totals.pendentes} ${totals.pendentes === 1 ? "PENDENTE" : "PENDENTES"}`, cor: "#FFC53D" }] : []),
+          { t: "RECORRENTES ›", onClick: () => setShowRec(true) }
         ]}
         pct={totals.totalPrevisto > 0 ? (totals.totalRecebido / totals.totalPrevisto) * 100 : 0}
         pctLabel={totals.totalPrevisto > 0 ? `${Math.round((totals.totalRecebido / totals.totalPrevisto) * 100)}% do previsto recebido` : null}
         faixa={(
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%" }}>
-              <span style={{ fontSize: 11, fontWeight: 700, color: "#8B93B5", textTransform: "uppercase", letterSpacing: 0.5 }}>Recebidas</span>
-              <button type="button" className="tap" onClick={() => setShowRec(true)} style={{ fontSize: 11, fontWeight: 700, color: "#B8C2E8", background: "transparent", border: "none", cursor: "pointer", textTransform: "uppercase", letterSpacing: 0.5, fontFamily: "inherit", padding: 0 }}>Recorrentes ›</button>
-            </div>
             {pilulasRec.slice(0, 8).map(({ r, label }) => (
               <button key={r.id} type="button" className="tap" onClick={() => openEdit(r)} title="Abrir esta receita"
                 style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 700, padding: "4px 11px", borderRadius: 999, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.16)", color: "#E6EBFA", cursor: "pointer", fontFamily: "inherit" }}>
