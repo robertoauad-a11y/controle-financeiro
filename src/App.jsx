@@ -1504,6 +1504,7 @@ export default function App() {
         .grid2 { display: grid; grid-template-columns: 1fr; gap: 20px; }
         @media (min-width: 680px) { .grid2 { grid-template-columns: 1fr 1fr; } .grid2 > * { margin-bottom: 0 !important; } }
         @media (min-width: 680px) and (max-width: 1099px) { .grid2.igual { grid-auto-rows: 1fr; } }
+        @media (min-width: 680px) { .cardAn { min-height: 380px; } }
         @media (min-width: 1100px) { .grid2 { grid-template-columns: 1fr 1fr 1fr; } }
         input[type="date"]::-webkit-date-and-time-value, input[type="month"]::-webkit-date-and-time-value { text-align: left; }
         .grid2c { display: grid; grid-template-columns: 1fr; gap: 20px; }
@@ -2116,7 +2117,7 @@ function AttentionCard({ itens, onNavigate, onConcluirDemanda, title = "Precisa 
 function IcoBase({ size = 16, color = "currentColor", style = undefined, children }) {
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={style}>{children}</svg>;
 }
-const IcoDonut = (p) => <IcoBase {...p}><circle cx="12" cy="12" r="9" /><path d="M12 3v9l7.8 4.5" /></IcoBase>;
+const IcoDonut = (p) => <IcoBase {...p}><path d="M21.21 15.89A10 10 0 1 1 8 2.83" /><path d="M22 12A10 10 0 0 0 12 2v10z" /></IcoBase>;
 const IcoBarras = (p) => <IcoBase {...p}><path d="M5 20V10M12 20V4M19 20v-7" /></IcoBase>;
 const IcoLinha = (p) => <IcoBase {...p}><path d="M3 17l6-6 4 4 8-9" /></IcoBase>;
 const IcoLista = (p) => <IcoBase {...p}><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" /></IcoBase>;
@@ -2979,19 +2980,19 @@ function ProximosDiasCard({ itens, onOpenItem, onAcao, onSecundaria = null, hidd
                   <span style={{ color: cor(it.tipo), fontWeight: 700 }}>{it.tipo}</span> · {it.sub}
                 </div>
               </div>
-              {it.valor ? <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: C.muted, flexShrink: 0 }}>{hidden ? "•••" : fmtBRL(it.valor)}</span> : (it.tipo === "Fixo" || (it.tipo === "Custo" && it.valor === 0)) ? <span style={{ fontSize: 11, color: C.faint, flexShrink: 0 }}>sem valor</span> : null}
+              {it.valor ? <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: C.muted, flexShrink: 0, minWidth: 74, textAlign: "right" }}>{hidden ? "•••" : fmtBRL(it.valor)}</span> : (it.tipo === "Fixo" || (it.tipo === "Custo" && it.valor === 0)) ? <span style={{ fontSize: 11, color: C.faint, flexShrink: 0, minWidth: 74, textAlign: "right" }}>sem valor</span> : <span style={{ flexShrink: 0, minWidth: 74 }} />}
               {onAcao && (
                 <button type="button" onClick={(e) => { e.stopPropagation(); onAcao(it); }}
-                  style={{ flexShrink: 0, height: 28, borderRadius: 14, border: `1px solid ${grupoUnico ? C.border : C.emerald}`, background: grupoUnico ? "transparent" : C.emeraldSoft, color: grupoUnico ? C.inkSoft : C.emerald, cursor: "pointer", fontSize: 11.5, fontWeight: 700, padding: "0 11px" }}>
+                  style={{ flexShrink: 0, width: 74, height: 28, borderRadius: 14, border: `1px solid ${grupoUnico ? C.border : C.emerald}`, background: grupoUnico ? "transparent" : C.emeraldSoft, color: grupoUnico ? C.inkSoft : C.emerald, cursor: "pointer", fontSize: 11.5, fontWeight: 700, padding: 0 }}>
                   {it.tipo === "Fixo" ? "Lançar" : it.tipo === "Custo" ? "Pagar" : "Concluir"}
                 </button>
               )}
-              {onSecundaria && (it.tipo === "Fixo" || it.tipo === "Tarefa") && (
+              {onSecundaria && (it.tipo === "Fixo" || it.tipo === "Tarefa" ? (
                 <button type="button" className="tap" onClick={(e) => { e.stopPropagation(); onSecundaria(it); }}
-                  style={{ flexShrink: 0, height: 28, borderRadius: 14, border: `1px solid ${C.border}`, background: "transparent", color: C.muted, cursor: "pointer", fontSize: 11.5, fontWeight: 700, padding: "0 10px", fontFamily: "inherit" }}>
+                  style={{ flexShrink: 0, width: 76, height: 28, borderRadius: 14, border: `1px solid ${C.border}`, background: "transparent", color: C.muted, cursor: "pointer", fontSize: 11.5, fontWeight: 700, padding: 0, fontFamily: "inherit" }}>
                   {it.tipo === "Fixo" ? "Dispensar" : "Excluir"}
                 </button>
-              )}
+              ) : <span style={{ flexShrink: 0, width: 76 }} />)}
             </div>
             </React.Fragment>
           ))}
@@ -3360,7 +3361,7 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
   const proximosDias = useMemo(() => {
     const lista = proximos30.map(i => ({
       id: i.id, tipo: i.tab === "demandas" ? "Tarefa" : "Custo", label: i.label, data: i.data,
-      sub: rotuloAgenda(i), tab: i.tab, rawId: i.rawId
+      sub: rotuloAgenda(i), tab: i.tab, rawId: i.rawId, valor: i.tab === "custos" ? i.valor : undefined
     }));
     fixosFaltam.forEach(f => {
       const data = vencimentoDoFixo(f, mesAtual);
@@ -3564,8 +3565,8 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
       <div className="in" style={{ background: C.card, boxShadow: shadowSm, borderRadius: 18, padding: "20px 22px", marginBottom: 20 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12, marginBottom: 16 }}>
           <div>
-            <TituloCard Icone={TrendingUp} sufixo={mesLabel} mb={0}>Projeção de fechamento</TituloCard>
-            <div style={{ fontSize: 11.5, color: C.faint, marginTop: 3 }}>{projQuitado ? "Tudo o que foi lançado já foi pago e recebido" : projEstimada ? ((fixosEst > 0 || receitasEstTotal > 0) ? "Estimativa: o previsto mais fixos e receitas habituais ainda não lançados" : "Estimativa: o previsto, com custos sem valor estimados pelo último pago") : "Se tudo o que está previsto for pago e recebido"}</div>
+            <TituloCard Icone={TrendingUp} mb={0}>Projeção de fechamento</TituloCard>
+            <div style={{ fontSize: 11.5, color: C.faint, marginTop: 3 }}>{mesLabel} · {projQuitado ? "Tudo o que foi lançado já foi pago e recebido" : projEstimada ? ((fixosEst > 0 || receitasEstTotal > 0) ? "Estimativa: o previsto mais fixos e receitas habituais ainda não lançados" : "Estimativa: o previsto, com custos sem valor estimados pelo último pago") : "Se tudo o que está previsto for pago e recebido"}</div>
           </div>
           <div style={{ textAlign: "right" }}>
             <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 24, fontWeight: 700, color: saldoEstimado < 0 ? C.coral : C.emerald }}>
@@ -3607,10 +3608,10 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
               <div style={{ fontSize: 11, color: C.faint, marginBottom: 8 }}>
                 Comparado ao que você normalmente já tinha pago até o dia {ritmo.diaRef}, nos últimos {ritmo.nMeses === 1 ? "mês" : `${ritmo.nMeses} meses`} — não à média do mês inteiro
               </div>
-              <div style={{ position: "relative", height: 15, borderRadius: 8, background: C.border, margin: "6px 0 26px" }}>
-                <div style={{ height: "100%", width: `${Math.min(ritmo.pct, 200) / 2}%`, borderRadius: 8, background: Math.round(ritmo.pct) > 150 ? "linear-gradient(90deg,#FFB929,#FF5A68)" : Math.round(ritmo.pct) > 100 ? "linear-gradient(90deg,#FFC53D,#FFB929)" : "linear-gradient(90deg,#00E0A8,#22D3EE)" }} />
+              <div style={{ position: "relative", height: 22, borderRadius: 11, background: C.border, margin: "6px 0 28px" }}>
+                <div style={{ height: "100%", width: `${Math.min(ritmo.pct, 200) / 2}%`, borderRadius: 11, background: Math.round(ritmo.pct) > 150 ? "linear-gradient(90deg,#FFB929,#FF5A68)" : Math.round(ritmo.pct) > 100 ? "linear-gradient(90deg,#FFC53D,#FFB929)" : "linear-gradient(90deg,#00E0A8,#22D3EE)" }} />
                 <div style={{ position: "absolute", left: "50%", top: -5, bottom: -5, width: 2, borderRadius: 1, background: C.ink, opacity: 0.55 }} />
-                <span style={{ position: "absolute", left: "50%", top: 21, transform: "translateX(-50%)", fontSize: 10, color: C.faint }}>normal</span>
+                <span style={{ position: "absolute", left: "50%", top: 29, transform: "translateX(-50%)", fontSize: 10, color: C.faint }}>normal</span>
               </div>
               <div style={{ fontSize: 11, color: C.faint, marginTop: 8 }}>
                 {ehMesCorrente ? "Pago até agora" : "Pago no mês"}: <strong style={{ color: C.ink }}>{hidden ? "•••" : fmtBRL(ritmo.pagoAteAgora)}</strong>
@@ -3639,25 +3640,25 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
         {/* Orçamento agora vive dentro do card de projeção */}
 
                 {analise === "custos" && porFonte.length > 1 && (
-        <div className="in" style={{ background: C.card, boxShadow: sombraAn(), borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "40ms", display: "flex", flexDirection: "column" }}>
+        <div className="in cardAn" style={{ background: C.card, boxShadow: sombraAn(), borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "40ms", display: "flex", flexDirection: "column" }}>
           <TituloCard Icone={IcoDonut} direita={mesLabel}>Custos por fonte</TituloCard>
           <div style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "center" }}>
-            <BarraEmpilhada altura={60} espaco={11} dados={porFonte} corDe={fonteColor} hidden={hidden} nota={meiosMes.join(" · ")} totalLabel="Lançado (pago + a pagar)" />
+            <BarraEmpilhada altura={72} espaco={14} dados={porFonte} corDe={fonteColor} hidden={hidden} nota={meiosMes.join(" · ")} totalLabel="Lançado (pago + a pagar)" />
           </div>
         </div>
         )}
 
                 {analise === "receitas" && porCategoria.length > 1 && (
-        <div className="in" style={{ background: C.card, boxShadow: sombraAn(), borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "120ms", display: "flex", flexDirection: "column" }}>
+        <div className="in cardAn" style={{ background: C.card, boxShadow: sombraAn(), borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "120ms", display: "flex", flexDirection: "column" }}>
           <TituloCard Icone={IcoDonut} direita={mesLabel}>Receitas por título</TituloCard>
           <div style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "center" }}>
-            <BarraEmpilhada altura={60} espaco={11} dados={porCategoria} corDe={catColor} hidden={hidden} />
+            <BarraEmpilhada altura={72} espaco={14} dados={porCategoria} corDe={catColor} hidden={hidden} />
           </div>
         </div>
         )}
 
         {analise === "evolucao" && (
-        <div className="in" style={{ background: C.card, boxShadow: sombraAn(), borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "160ms", display: "flex", flexDirection: "column", alignSelf: "stretch" }}>
+        <div className="in cardAn" style={{ background: C.card, boxShadow: sombraAn(), borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "160ms", display: "flex", flexDirection: "column", alignSelf: "stretch" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
             <TituloCard Icone={IcoBarras} sub="· toque num mês para abri-lo" mb={0}>Pago x Recebido</TituloCard>
             <span style={{ display: "flex", gap: 10, fontSize: 11, color: C.muted, fontWeight: 600 }}>
@@ -3668,8 +3669,8 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
           {tendencia.some(d => d.fora) && (
             <div style={{ fontSize: 11, color: C.faint, marginBottom: 6 }}>Meses esmaecidos são anteriores ao início da contagem (lançamentos incompletos).</div>
           )}
-          <div style={{ width: "100%", flex: 1, minHeight: 240 }}>
-            <ResponsiveContainer width="100%" height="100%" minHeight={240}>
+          <div style={{ width: "100%", flex: 1, minHeight: 300 }}>
+            <ResponsiveContainer width="100%" height="100%" minHeight={300}>
               <BarChart data={tendencia} barGap={4} barCategoryGap="24%" margin={{ top: 18 }}>
                 <defs>
                   <linearGradient id="gPago" x1="0" y1="0" x2="0" y2="1">
@@ -3698,7 +3699,7 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
         )}
 
         {analise === "custos" && (
-        <div className="in" style={{ background: C.card, boxShadow: sombraAn(), borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "200ms" }}>
+        <div className="in cardAn" style={{ background: C.card, boxShadow: sombraAn(), borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "200ms" }}>
           <TituloCard Icone={IcoLista} direita={mesLabel} mb={10}>Maiores custos</TituloCard>
           {topCustos.length === 0 ? (
             <div style={{ color: C.muted, fontSize: 13, padding: "16px 0", textAlign: "center" }}>Sem custos lançados neste mês.</div>
@@ -3726,7 +3727,7 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
         )}
 
         {analise === "custos" && (
-        <div className="in" style={{ background: C.card, boxShadow: sombraAn(), borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "240ms", display: "flex", flexDirection: "column" }}>
+        <div className="in cardAn" style={{ background: C.card, boxShadow: sombraAn(), borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "240ms", display: "flex", flexDirection: "column" }}>
           <TituloCard Icone={IcoTroca} mb={4}>Este mês x anterior</TituloCard>
           <div style={{ fontSize: 11.5, color: C.faint, marginBottom: 10 }}>Por fonte · {diaCorteComp !== null ? `${monthLabel(mesAnterior)} até o dia ${diaCorteComp} (cinza) x ${mesLabel} até hoje` : `${monthLabel(mesAnterior)} (cinza) x ${mesLabel}`}</div>
           {comparativo.length === 0 ? (
@@ -3776,7 +3777,7 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
         )}
 
         {analise === "evolucao" && movConta.rows.length >= 2 && movConta.contas.length > 0 && (
-        <div className="in" style={{ background: C.card, boxShadow: sombraAn(), borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "280ms", display: "flex", flexDirection: "column", alignSelf: "stretch" }}>
+        <div className="in cardAn" style={{ background: C.card, boxShadow: sombraAn(), borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "280ms", display: "flex", flexDirection: "column", alignSelf: "stretch" }}>
           <TituloCard Icone={IcoLinha} mb={4}>Movimento por conta</TituloCard>
           <div style={{ fontSize: 11.5, color: C.faint, marginBottom: 10 }}>Acumulado: entradas menos saídas de cada conta desde {MESES[inicioIdx].toLowerCase()} (movimento, sem saldo inicial)</div>
           <div style={{ display: "flex", gap: 12, flexWrap: "wrap", fontSize: 11.5, fontWeight: 600, color: C.muted, marginBottom: 6 }}>
@@ -3791,8 +3792,8 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
               );
             })}
           </div>
-          <div style={{ width: "100%", flex: 1, minHeight: 240 }}>
-            <ResponsiveContainer width="100%" height="100%" minHeight={240}>
+          <div style={{ width: "100%", flex: 1, minHeight: 300 }}>
+            <ResponsiveContainer width="100%" height="100%" minHeight={300}>
               <AreaChart data={movConta.rows} margin={{ top: 8, right: 10, left: 10 }}>
                 <defs>
                   {movConta.contas.map((k, mi) => (
@@ -3819,7 +3820,7 @@ function DashboardTab({ custos, depositos = [], receitas, demandas, onNavigate, 
         </div>
         )}
         {analise === "receitas" && (
-        <div className="in" style={{ background: C.card, boxShadow: sombraAn(), borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "320ms" }}>
+        <div className="in cardAn" style={{ background: C.card, boxShadow: sombraAn(), borderRadius: 16, padding: 20, marginBottom: 20, animationDelay: "320ms" }}>
           <TituloCard Icone={IcoAlvo} direita={mesLabel} mb={4}>Previsto x recebido</TituloCard>
           <div style={{ fontSize: 11.5, color: C.faint, marginBottom: 10 }}>O que já entrou, sobre o que estava previsto</div>
           {receitasComparativo.length === 0 ? (
